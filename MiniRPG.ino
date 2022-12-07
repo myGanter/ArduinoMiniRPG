@@ -1,5 +1,7 @@
+#define DEBUG_MOD true
 #define W 15
 #define H 10
+#define GameLoopDelay 300
 #define ActivateRoomValue 1
 #define AxisThreshold 30 // % 
 #define MinMaxAxisValues 14000 // max for GY-521 ~ 20000
@@ -65,19 +67,29 @@ class TimeWorker
     unsigned short _delay;
     void (*_clbk)();
     unsigned long _lastExecTime;
+    bool *_eventInvokeFlag;
   
   public:
-    TimeWorker(unsigned short delay, void (*clbk)())
+    TimeWorker(unsigned short delay, void (*clbk)(), bool *eventInvokeFlag)
     {
       _delay = delay;
       _clbk = clbk;
       _lastExecTime = millis();
+      _eventInvokeFlag = eventInvokeFlag;
     }
 
     void Update()
     {
       unsigned long currentTime = millis();
-      if ((currentTime - _lastExecTime) > _delay)
+      bool invoke = (currentTime - _lastExecTime) > _delay;
+
+      if (_eventInvokeFlag != NULL)
+      {
+        invoke = invoke && (*_eventInvokeFlag);
+        *_eventInvokeFlag = false;
+      }
+
+      if (invoke)
       {
         (*_clbk)();
         _lastExecTime = currentTime;
@@ -272,6 +284,7 @@ Diraction GetAxisDiraction()
 Room Map[H][W];
 Point Hero = { .X = 0, .Y = 0 };
 bool HeroPosIsRightChar = false;
+Diraction LastAxisDiraction = ZeroDiraction;
 //-------------------- end global game vars
 
 
@@ -426,6 +439,11 @@ void DrawMap()
     }
     Serial.print("\n");
   }
+}
+
+void PrintHeroCoord()
+{
+  Serial.print("Hero "); Serial.print(Hero.X); Serial.print(":"); Serial.println(Hero.Y);
 }
 
 bool CheckTopRoomAvailable(unsigned char x, unsigned char y)
@@ -792,22 +810,32 @@ void LcdDrawMap(unsigned char x, unsigned char y)
 
 
 //-------------------- workers
-void HeroAxisController()
+bool InvokeGameWorkerFlag = false;
+
+void InputWorkerClbk()
 {
-  Diraction diraction = GetAxisDiraction();
-  if (HeroMoveTo(diraction))
+  LastAxisDiraction = GetAxisDiraction();
+
+  if (LastAxisDiraction != ZeroDiraction)
+    InvokeGameWorkerFlag = true;
+}
+
+TimeWorker InputWorker = TimeWorker(10, InputWorkerClbk, NULL);
+
+void GameWorkerClbk()
+{
+  if (HeroMoveTo(LastAxisDiraction))
   {
+#if DEBUG_MOD
     DrawMap();
-    
-    Serial.print("Hero "); Serial.print(Hero.X); Serial.print(":"); Serial.println(Hero.Y);
+    PrintHeroCoord();
+#endif    
     
     LcdDrawMap(Hero.X, Hero.Y);
-
-    delay(100);
   }
 }
 
-TimeWorker AxisWorker = TimeWorker(10, HeroAxisController);
+TimeWorker GameWorker = TimeWorker(GameLoopDelay, GameWorkerClbk, &InvokeGameWorkerFlag);
 //-------------------- end workers
 
 
@@ -819,7 +847,8 @@ void ArduinoOff()
   sleep_mode();
 }
 
-void setup() {
+void setup() 
+{
   Serial.begin(9600);
   randomSeed(analogRead(0));
   InitLcd();
@@ -831,12 +860,18 @@ void setup() {
 
   ClearMap();
   GenerateMap();
-  
+
+#if DEBUG_MOD
   DrawMap();
+  PrintHeroCoord();
+#endif
+
   LcdDrawMap(Hero.X, Hero.Y);
 }
 
-void loop() {
-  AxisWorker.Update();
+void loop() 
+{
+  InputWorker.Update();
+  GameWorker.Update();
 }
 //-------------------- end main
