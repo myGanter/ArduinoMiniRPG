@@ -983,7 +983,18 @@ void GameWorkerClbk()
 {
   if (HeroMoveTo(LastAxisDiraction))
   {
-    DrawGame();
+    if (Hero.X == Portal.X && Hero.Y == Portal.Y)
+    {
+      CurrentAppState = PrintInfo;
+      LvlCounter++;
+      Hero.X = 0;
+      Hero.Y = 0;
+      InitLcdText();
+    }
+    else
+    {
+      DrawGame();
+    }
   }
 }
 
