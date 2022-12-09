@@ -36,6 +36,12 @@ enum Diraction : unsigned char
   ZeroDiraction = 1 << 4,
 };
 
+enum AppState : unsigned char
+{
+  PrintInfo = 0,
+  GameLoop = 1
+};
+
 struct Point
 {
   unsigned char X;
@@ -56,6 +62,23 @@ void ClearArr(T arr[], int count, T defaultVal)
 {
   for (int i = 0; i < count; ++i)
     arr[i] = defaultVal;
+}
+
+char* StringConcatenate(const char *first, const char *second) 
+{
+    int l1 = 0, l2 = 0;
+    const char * f = first, * l = second;
+
+    while (*f++) ++l1;
+    while (*l++) ++l2;
+
+    char *result = new char[l1 + l2 + 1];
+
+    for (int i = 0; i < l1; i++) result[i] = first[i];
+    for (int i = l1; i < l1 + l2; i++) result[i] = second[i - l1];
+
+    result[l1 + l2] = '\0';
+    return result;
 }
 //-------------------- end common
 
@@ -285,6 +308,8 @@ Room Map[H][W];
 Point Hero = { .X = 0, .Y = 0 };
 bool HeroPosIsRightChar = false;
 Diraction LastAxisDiraction = ZeroDiraction;
+AppState CurrentAppState = PrintInfo;
+unsigned int LvlCounter = 0;
 //-------------------- end global game vars
 
 
@@ -806,6 +831,74 @@ void LcdDrawMap(unsigned char x, unsigned char y)
     Lcd.write(lcd2RowIndexes[1]);
   }  
 }
+
+char *LcdText = NULL;
+int TextIndex = 0;
+int TextOffSet = 0;
+
+void InitLcdText()
+{
+  Lcd.clear();
+
+  char *depth = "DEPTH ";
+  char *goodluck = "\ngood luck...  ";
+  String *lvlCounterStr = new String(LvlCounter);
+  char *temp = StringConcatenate(depth, lvlCounterStr->c_str());
+  
+  LcdText = StringConcatenate(temp, goodluck);
+
+  delete lvlCounterStr;
+  delete temp;
+}
+
+bool DrawChar()
+{
+  if (LcdText != NULL && LcdText[TextIndex] != '\0')
+  {
+    if (LcdText[TextIndex] == '\n')
+    {
+#if DEBUG_MOD
+      Serial.println();
+#endif
+
+      TextOffSet = ++TextIndex;
+    }
+    else
+    {
+#if DEBUG_MOD
+      Serial.print(LcdText[TextIndex]);
+#endif
+
+      Lcd.setCursor(TextIndex - TextOffSet, TextOffSet == 0 ? 0 : 1);
+      Lcd.print(LcdText[TextIndex++]);
+    }    
+
+    return true;
+  }  
+#if DEBUG_MOD
+  else if (LcdText[TextIndex] == '\0')
+  {
+    Serial.println();
+  }
+#endif
+
+  char *ptr = LcdText;
+  LcdText = NULL;
+  delete ptr;
+  TextIndex = 0;
+  TextOffSet = 0;
+  return false;  
+}
+
+void DrawGame()
+{
+#if DEBUG_MOD
+    DrawMap();
+    PrintHeroCoord();
+#endif    
+    
+  LcdDrawMap(Hero.X, Hero.Y);
+}
 //-------------------- end lcd drawer
 
 
@@ -822,20 +915,31 @@ void InputWorkerClbk()
 
 TimeWorker InputWorker = TimeWorker(10, InputWorkerClbk, NULL);
 
+
 void GameWorkerClbk()
 {
   if (HeroMoveTo(LastAxisDiraction))
   {
-#if DEBUG_MOD
-    DrawMap();
-    PrintHeroCoord();
-#endif    
-    
-    LcdDrawMap(Hero.X, Hero.Y);
+    DrawGame();
   }
 }
 
 TimeWorker GameWorker = TimeWorker(GameLoopDelay, GameWorkerClbk, &InvokeGameWorkerFlag);
+
+
+void LcdTextPrintWorkerClbk()
+{
+  if (!DrawChar())
+  {
+    ClearMap();
+    GenerateMap();
+    CurrentAppState = GameLoop;
+
+    DrawGame();
+  }
+}
+
+TimeWorker LcdTextPrintWorker = TimeWorker(300, LcdTextPrintWorkerClbk, NULL);
 //-------------------- end workers
 
 
@@ -858,20 +962,22 @@ void setup()
     return;
   }
 
-  ClearMap();
-  GenerateMap();
-
-#if DEBUG_MOD
-  DrawMap();
-  PrintHeroCoord();
-#endif
-
-  LcdDrawMap(Hero.X, Hero.Y);
+  CurrentAppState = PrintInfo;
+  InitLcdText();
 }
 
 void loop() 
 {
   InputWorker.Update();
-  GameWorker.Update();
+
+  switch (CurrentAppState)
+  {
+    case GameLoop:
+      GameWorker.Update();
+    break;
+    case PrintInfo:
+      LcdTextPrintWorker.Update();
+    break;
+  }
 }
 //-------------------- end main
