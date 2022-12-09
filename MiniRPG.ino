@@ -790,9 +790,16 @@ void LcdDrawMap(unsigned char x, unsigned char y)
   for (int i = 0; i < 8; ++i)
     ClearArr<byte>(chars[i], 8, 0);
 
-  LcdCacheCreateChar(x, y, lcdIndexes, chars, lcdX, &maxCharIndex);
-
-  ReconfigureFirstHeroChar(lcdIndexes, chars, lcdX, &maxCharIndex);
+  if (x == Portal.X && y == Portal.Y)
+  {
+    lcdIndexes[lcdX * 2] = (byte)PortalLeftChar;
+    lcdIndexes[lcdX * 2 + 1] = (byte)PortalRightChar;
+  }
+  else
+  {
+    LcdCacheCreateChar(x, y, lcdIndexes, chars, lcdX, &maxCharIndex);
+    ReconfigureFirstHeroChar(lcdIndexes, chars, lcdX, &maxCharIndex);
+  }
 
   unsigned char newX = x;
   while (CheckLeftRoomAvailable(newX--, y) && (newX % LcdRenderW) < lcdX)
@@ -981,20 +988,17 @@ TimeWorker InputWorker = TimeWorker(10, InputWorkerClbk, NULL);
 
 void GameWorkerClbk()
 {
-  if (HeroMoveTo(LastAxisDiraction))
+  if (Hero.X == Portal.X && Hero.Y == Portal.Y)
   {
-    if (Hero.X == Portal.X && Hero.Y == Portal.Y)
-    {
-      CurrentAppState = PrintInfo;
-      LvlCounter++;
-      Hero.X = 0;
-      Hero.Y = 0;
-      InitLcdText();
-    }
-    else
-    {
-      DrawGame();
-    }
+    CurrentAppState = PrintInfo;
+    LvlCounter++;
+    Hero.X = 0;
+    Hero.Y = 0;
+    InitLcdText();
+  }
+  else if (HeroMoveTo(LastAxisDiraction))
+  {
+    DrawGame();
   }
 }
 
