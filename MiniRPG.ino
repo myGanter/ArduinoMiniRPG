@@ -1,4 +1,5 @@
 #define DEBUG_MOD true
+#define PRINT_LVL_TEXT true
 #define W 15
 #define H 10
 #define GameLoopDelay 300
@@ -10,6 +11,8 @@
 #define LcdH 2 // if > 2 then refactor LcdDrawMap func
 #define LcdRenderW 8 // LcdW / 2
 #define LcdFogChar '#' //optionally 255 can be used
+#define PortalLeftChar '('
+#define PortalRightChar ')'
 
 #include "I2Cdev.h"
 #include "MPU6050.h"
@@ -24,7 +27,7 @@ enum Room : unsigned char
 {
   Closed = 0,
   Right = 1 << 0,
-  Down = 1 << 1,
+  Down = 1 << 1
 };
 
 enum Diraction : unsigned char
@@ -306,6 +309,7 @@ Diraction GetAxisDiraction()
 //-------------------- global game vars
 Room Map[H][W];
 Point Hero = { .X = 0, .Y = 0 };
+Point Portal = { .X = 0, .Y = 0 };
 bool HeroPosIsRightChar = false;
 Diraction LastAxisDiraction = ZeroDiraction;
 AppState CurrentAppState = PrintInfo;
@@ -430,20 +434,28 @@ void DrawMap()
     for (int x = 0; x < W; ++x)
     {
       Room val = Map[y][x];
-      char* offset = " ";
+      char* offset = "  ";
 
       if (Hero.Y == y && Hero.X == x)
       {
-        Serial.print("#");
+        if (HeroPosIsRightChar)
+          Serial.print(" #");
+        else
+          Serial.print("# ");
+        offset = "";
+      }
+      else if (Portal.Y == y && Portal.X == x)
+      {
+        Serial.print("()");
         offset = "";
       }
 
       Serial.print(offset);
 
       if (val & Right)
-        Serial.print("  ");
+        Serial.print(" ");
       else
-        Serial.print(" |");
+        Serial.print("|");
     }
     Serial.print("\n");
 
@@ -466,9 +478,10 @@ void DrawMap()
   }
 }
 
-void PrintHeroCoord()
+void PrintHeroAndPortalCoord()
 {
-  Serial.print("Hero "); Serial.print(Hero.X); Serial.print(":"); Serial.println(Hero.Y);
+  Serial.print("Hero "); Serial.print(Hero.X); Serial.print(":"); Serial.print(Hero.Y);
+  Serial.print("  Portal "); Serial.print(Portal.X); Serial.print(":"); Serial.println(Portal.Y);
 }
 
 bool CheckTopRoomAvailable(unsigned char x, unsigned char y)
@@ -528,6 +541,12 @@ Diraction GetRoomDiractions(unsigned char x, unsigned char y)
     res |= Left;
 
   return res;
+}
+
+void InitPortalPoint()
+{ 
+  Portal.X = random(W);
+  Portal.Y = random((Portal.X >= (W / 2) ? 0 : H / 2), H);
 }
 //-------------------- end map
 
@@ -778,25 +797,69 @@ void LcdDrawMap(unsigned char x, unsigned char y)
   unsigned char newX = x;
   while (CheckLeftRoomAvailable(newX--, y) && (newX % LcdRenderW) < lcdX)
   {
-    LcdCacheCreateChar(newX, y, lcdIndexes, chars, newX % LcdRenderW, &maxCharIndex);
+    uint8_t nLcdX = newX % LcdRenderW;
+
+    if (newX == Portal.X && y == Portal.Y)
+    {
+      lcdIndexes[nLcdX * 2] = (byte)PortalLeftChar;
+      lcdIndexes[nLcdX * 2 + 1] = (byte)PortalRightChar;
+    }
+    else
+    {
+      LcdCacheCreateChar(newX, y, lcdIndexes, chars, nLcdX, &maxCharIndex);
+    }
   }
 
   newX = x;
   while (CheckRightRoomAvailable(newX++, y) && (newX % LcdRenderW) > lcdX)
   {
-    LcdCacheCreateChar(newX, y, lcdIndexes, chars, newX % LcdRenderW, &maxCharIndex);
+    uint8_t nLcdX = newX % LcdRenderW;
+
+    if (newX == Portal.X && y == Portal.Y)
+    {
+      lcdIndexes[nLcdX * 2] = (byte)PortalLeftChar;
+      lcdIndexes[nLcdX * 2 + 1] = (byte)PortalRightChar;
+    }
+    else
+    {
+      LcdCacheCreateChar(newX, y, lcdIndexes, chars, nLcdX, &maxCharIndex);
+    }
   }
 
   byte lcd2RowIndexes[2] = { 255, 255 };
   if (lcdY == 0)
   {
     if (CheckBottomRoomAvailable(x, y))
-      LcdCacheCreateChar(x, y + 1, lcd2RowIndexes, chars, 0, &maxCharIndex);
+    {
+      unsigned char incY = y + 1;
+
+      if (x == Portal.X && incY == Portal.Y)
+      {
+        lcd2RowIndexes[0] = (byte)PortalLeftChar;
+        lcd2RowIndexes[1] = (byte)PortalRightChar;
+      }
+      else
+      {
+        LcdCacheCreateChar(x, incY, lcd2RowIndexes, chars, 0, &maxCharIndex);
+      }
+    }
   }
   else
   {
     if (CheckTopRoomAvailable(x, y))
-      LcdCacheCreateChar(x, y - 1, lcd2RowIndexes, chars, 0, &maxCharIndex);
+    {
+      unsigned char decY = y - 1;
+
+      if (x == Portal.X && decY == Portal.Y)
+      {
+        lcd2RowIndexes[0] = (byte)PortalLeftChar;
+        lcd2RowIndexes[1] = (byte)PortalRightChar;
+      }
+      else
+      {
+        LcdCacheCreateChar(x, decY, lcd2RowIndexes, chars, 0, &maxCharIndex);
+      }
+    }      
   }
 
   for (int i = 0; i < maxCharIndex; ++i)
@@ -894,7 +957,7 @@ void DrawGame()
 {
 #if DEBUG_MOD
     DrawMap();
-    PrintHeroCoord();
+    PrintHeroAndPortalCoord();
 #endif    
     
   LcdDrawMap(Hero.X, Hero.Y);
@@ -929,10 +992,15 @@ TimeWorker GameWorker = TimeWorker(GameLoopDelay, GameWorkerClbk, &InvokeGameWor
 
 void LcdTextPrintWorkerClbk()
 {
+#if PRINT_LVL_TEXT
   if (!DrawChar())
+#else
+  if (true)
+#endif
   {
     ClearMap();
     GenerateMap();
+    InitPortalPoint();
     CurrentAppState = GameLoop;
 
     DrawGame();
