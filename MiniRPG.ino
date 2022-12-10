@@ -1,5 +1,8 @@
+#define DEBUG_MOD true //set to true to duplicate the full status in the serial port
+#define PRINT_LVL_TEXT true
 #define W 15
 #define H 10
+#define GameLoopDelay 300
 #define ActivateRoomValue 1
 #define AxisThreshold 30 // % 
 #define MinMaxAxisValues 14000 // max for GY-521 ~ 20000
@@ -8,6 +11,8 @@
 #define LcdH 2 // if > 2 then refactor LcdDrawMap func
 #define LcdRenderW 8 // LcdW / 2
 #define LcdFogChar '#' //optionally 255 can be used
+#define PortalLeftChar '('
+#define PortalRightChar ')'
 
 #include "I2Cdev.h"
 #include "MPU6050.h"
@@ -22,7 +27,7 @@ enum Room : unsigned char
 {
   Closed = 0,
   Right = 1 << 0,
-  Down = 1 << 1,
+  Down = 1 << 1
 };
 
 enum Diraction : unsigned char
@@ -32,6 +37,12 @@ enum Diraction : unsigned char
   Bottom = 1 << 2,
   Left = 1 << 3,
   ZeroDiraction = 1 << 4,
+};
+
+enum AppState : unsigned char
+{
+  PrintInfo = 0,
+  GameLoop = 1
 };
 
 struct Point
@@ -55,6 +66,23 @@ void ClearArr(T arr[], int count, T defaultVal)
   for (int i = 0; i < count; ++i)
     arr[i] = defaultVal;
 }
+
+char* StringConcatenate(const char *first, const char *second) 
+{
+    int l1 = 0, l2 = 0;
+    const char * f = first, * l = second;
+
+    while (*f++) ++l1;
+    while (*l++) ++l2;
+
+    char *result = new char[l1 + l2 + 1];
+
+    for (int i = 0; i < l1; i++) result[i] = first[i];
+    for (int i = l1; i < l1 + l2; i++) result[i] = second[i - l1];
+
+    result[l1 + l2] = '\0';
+    return result;
+}
 //-------------------- end common
 
 
@@ -65,19 +93,29 @@ class TimeWorker
     unsigned short _delay;
     void (*_clbk)();
     unsigned long _lastExecTime;
+    bool *_eventInvokeFlag;
   
   public:
-    TimeWorker(unsigned short delay, void (*clbk)())
+    TimeWorker(unsigned short delay, void (*clbk)(), bool *eventInvokeFlag)
     {
       _delay = delay;
       _clbk = clbk;
       _lastExecTime = millis();
+      _eventInvokeFlag = eventInvokeFlag;
     }
 
     void Update()
     {
       unsigned long currentTime = millis();
-      if ((currentTime - _lastExecTime) > _delay)
+      bool invoke = (currentTime - _lastExecTime) > _delay;
+
+      if (_eventInvokeFlag != NULL)
+      {
+        invoke = invoke && (*_eventInvokeFlag);
+        *_eventInvokeFlag = false;
+      }
+
+      if (invoke)
       {
         (*_clbk)();
         _lastExecTime = currentTime;
@@ -271,7 +309,11 @@ Diraction GetAxisDiraction()
 //-------------------- global game vars
 Room Map[H][W];
 Point Hero = { .X = 0, .Y = 0 };
+Point Portal = { .X = 0, .Y = 0 };
 bool HeroPosIsRightChar = false;
+Diraction LastAxisDiraction = ZeroDiraction;
+AppState CurrentAppState = PrintInfo;
+unsigned int LvlCounter = 0;
 //-------------------- end global game vars
 
 
@@ -392,20 +434,28 @@ void DrawMap()
     for (int x = 0; x < W; ++x)
     {
       Room val = Map[y][x];
-      char* offset = " ";
+      char* offset = "  ";
 
       if (Hero.Y == y && Hero.X == x)
       {
-        Serial.print("#");
+        if (HeroPosIsRightChar)
+          Serial.print(" #");
+        else
+          Serial.print("# ");
+        offset = "";
+      }
+      else if (Portal.Y == y && Portal.X == x)
+      {
+        Serial.print("()");
         offset = "";
       }
 
       Serial.print(offset);
 
       if (val & Right)
-        Serial.print("  ");
+        Serial.print(" ");
       else
-        Serial.print(" |");
+        Serial.print("|");
     }
     Serial.print("\n");
 
@@ -426,6 +476,12 @@ void DrawMap()
     }
     Serial.print("\n");
   }
+}
+
+void PrintHeroAndPortalCoord()
+{
+  Serial.print("Hero "); Serial.print(Hero.X); Serial.print(":"); Serial.print(Hero.Y);
+  Serial.print("  Portal "); Serial.print(Portal.X); Serial.print(":"); Serial.println(Portal.Y);
 }
 
 bool CheckTopRoomAvailable(unsigned char x, unsigned char y)
@@ -485,6 +541,12 @@ Diraction GetRoomDiractions(unsigned char x, unsigned char y)
     res |= Left;
 
   return res;
+}
+
+void InitPortalPoint()
+{ 
+  Portal.X = random(W);
+  Portal.Y = random((Portal.X >= (W / 2) ? 0 : H / 2), H);
 }
 //-------------------- end map
 
@@ -728,32 +790,83 @@ void LcdDrawMap(unsigned char x, unsigned char y)
   for (int i = 0; i < 8; ++i)
     ClearArr<byte>(chars[i], 8, 0);
 
-  LcdCacheCreateChar(x, y, lcdIndexes, chars, lcdX, &maxCharIndex);
-
-  ReconfigureFirstHeroChar(lcdIndexes, chars, lcdX, &maxCharIndex);
+  if (x == Portal.X && y == Portal.Y)
+  {
+    lcdIndexes[lcdX * 2] = (byte)PortalLeftChar;
+    lcdIndexes[lcdX * 2 + 1] = (byte)PortalRightChar;
+  }
+  else
+  {
+    LcdCacheCreateChar(x, y, lcdIndexes, chars, lcdX, &maxCharIndex);
+    ReconfigureFirstHeroChar(lcdIndexes, chars, lcdX, &maxCharIndex);
+  }
 
   unsigned char newX = x;
   while (CheckLeftRoomAvailable(newX--, y) && (newX % LcdRenderW) < lcdX)
   {
-    LcdCacheCreateChar(newX, y, lcdIndexes, chars, newX % LcdRenderW, &maxCharIndex);
+    uint8_t nLcdX = newX % LcdRenderW;
+
+    if (newX == Portal.X && y == Portal.Y)
+    {
+      lcdIndexes[nLcdX * 2] = (byte)PortalLeftChar;
+      lcdIndexes[nLcdX * 2 + 1] = (byte)PortalRightChar;
+    }
+    else
+    {
+      LcdCacheCreateChar(newX, y, lcdIndexes, chars, nLcdX, &maxCharIndex);
+    }
   }
 
   newX = x;
   while (CheckRightRoomAvailable(newX++, y) && (newX % LcdRenderW) > lcdX)
   {
-    LcdCacheCreateChar(newX, y, lcdIndexes, chars, newX % LcdRenderW, &maxCharIndex);
+    uint8_t nLcdX = newX % LcdRenderW;
+
+    if (newX == Portal.X && y == Portal.Y)
+    {
+      lcdIndexes[nLcdX * 2] = (byte)PortalLeftChar;
+      lcdIndexes[nLcdX * 2 + 1] = (byte)PortalRightChar;
+    }
+    else
+    {
+      LcdCacheCreateChar(newX, y, lcdIndexes, chars, nLcdX, &maxCharIndex);
+    }
   }
 
   byte lcd2RowIndexes[2] = { 255, 255 };
   if (lcdY == 0)
   {
     if (CheckBottomRoomAvailable(x, y))
-      LcdCacheCreateChar(x, y + 1, lcd2RowIndexes, chars, 0, &maxCharIndex);
+    {
+      unsigned char incY = y + 1;
+
+      if (x == Portal.X && incY == Portal.Y)
+      {
+        lcd2RowIndexes[0] = (byte)PortalLeftChar;
+        lcd2RowIndexes[1] = (byte)PortalRightChar;
+      }
+      else
+      {
+        LcdCacheCreateChar(x, incY, lcd2RowIndexes, chars, 0, &maxCharIndex);
+      }
+    }
   }
   else
   {
     if (CheckTopRoomAvailable(x, y))
-      LcdCacheCreateChar(x, y - 1, lcd2RowIndexes, chars, 0, &maxCharIndex);
+    {
+      unsigned char decY = y - 1;
+
+      if (x == Portal.X && decY == Portal.Y)
+      {
+        lcd2RowIndexes[0] = (byte)PortalLeftChar;
+        lcd2RowIndexes[1] = (byte)PortalRightChar;
+      }
+      else
+      {
+        LcdCacheCreateChar(x, decY, lcd2RowIndexes, chars, 0, &maxCharIndex);
+      }
+    }      
   }
 
   for (int i = 0; i < maxCharIndex; ++i)
@@ -788,26 +901,128 @@ void LcdDrawMap(unsigned char x, unsigned char y)
     Lcd.write(lcd2RowIndexes[1]);
   }  
 }
+
+char *LcdText = NULL;
+int TextIndex = 0;
+int TextOffSet = 0;
+
+void InitLcdText()
+{
+  Lcd.clear();
+
+  char *depth = "DEPTH ";
+  char *goodluck = "\ngood luck...  ";
+  String *lvlCounterStr = new String(LvlCounter);
+  char *temp = StringConcatenate(depth, lvlCounterStr->c_str());
+  
+  LcdText = StringConcatenate(temp, goodluck);
+
+  delete lvlCounterStr;
+  delete temp;
+}
+
+bool DrawChar()
+{
+  if (LcdText != NULL && LcdText[TextIndex] != '\0')
+  {
+    if (LcdText[TextIndex] == '\n')
+    {
+#if DEBUG_MOD
+      Serial.println();
+#endif
+
+      TextOffSet = ++TextIndex;
+    }
+    else
+    {
+#if DEBUG_MOD
+      Serial.print(LcdText[TextIndex]);
+#endif
+
+      Lcd.setCursor(TextIndex - TextOffSet, TextOffSet == 0 ? 0 : 1);
+      Lcd.print(LcdText[TextIndex++]);
+    }    
+
+    return true;
+  }  
+#if DEBUG_MOD
+  else if (LcdText[TextIndex] == '\0')
+  {
+    Serial.println();
+  }
+#endif
+
+  char *ptr = LcdText;
+  LcdText = NULL;
+  delete ptr;
+  TextIndex = 0;
+  TextOffSet = 0;
+  return false;  
+}
+
+void DrawGame()
+{
+#if DEBUG_MOD
+    DrawMap();
+    PrintHeroAndPortalCoord();
+#endif    
+    
+  LcdDrawMap(Hero.X, Hero.Y);
+}
 //-------------------- end lcd drawer
 
 
 //-------------------- workers
-void HeroAxisController()
-{
-  Diraction diraction = GetAxisDiraction();
-  if (HeroMoveTo(diraction))
-  {
-    DrawMap();
-    
-    Serial.print("Hero "); Serial.print(Hero.X); Serial.print(":"); Serial.println(Hero.Y);
-    
-    LcdDrawMap(Hero.X, Hero.Y);
+bool InvokeGameWorkerFlag = false;
 
-    delay(100);
+void InputWorkerClbk()
+{
+  LastAxisDiraction = GetAxisDiraction();
+
+  if (LastAxisDiraction != ZeroDiraction)
+    InvokeGameWorkerFlag = true;
+}
+
+TimeWorker InputWorker = TimeWorker(10, InputWorkerClbk, NULL);
+
+
+void GameWorkerClbk()
+{
+  if (Hero.X == Portal.X && Hero.Y == Portal.Y)
+  {
+    CurrentAppState = PrintInfo;
+    LvlCounter++;
+    Hero.X = 0;
+    Hero.Y = 0;
+    InitLcdText();
+  }
+  else if (HeroMoveTo(LastAxisDiraction))
+  {
+    DrawGame();
   }
 }
 
-TimeWorker AxisWorker = TimeWorker(10, HeroAxisController);
+TimeWorker GameWorker = TimeWorker(GameLoopDelay, GameWorkerClbk, &InvokeGameWorkerFlag);
+
+
+void LcdTextPrintWorkerClbk()
+{
+#if PRINT_LVL_TEXT
+  if (!DrawChar())
+#else
+  if (true)
+#endif
+  {
+    ClearMap();
+    GenerateMap();
+    InitPortalPoint();
+    CurrentAppState = GameLoop;
+
+    DrawGame();
+  }
+}
+
+TimeWorker LcdTextPrintWorker = TimeWorker(300, LcdTextPrintWorkerClbk, NULL);
 //-------------------- end workers
 
 
@@ -819,7 +1034,8 @@ void ArduinoOff()
   sleep_mode();
 }
 
-void setup() {
+void setup() 
+{
   Serial.begin(9600);
   randomSeed(analogRead(0));
   InitLcd();
@@ -829,14 +1045,22 @@ void setup() {
     return;
   }
 
-  ClearMap();
-  GenerateMap();
-  
-  DrawMap();
-  LcdDrawMap(Hero.X, Hero.Y);
+  CurrentAppState = PrintInfo;
+  InitLcdText();
 }
 
-void loop() {
-  AxisWorker.Update();
+void loop() 
+{
+  InputWorker.Update();
+
+  switch (CurrentAppState)
+  {
+    case GameLoop:
+      GameWorker.Update();
+    break;
+    case PrintInfo:
+      LcdTextPrintWorker.Update();
+    break;
+  }
 }
 //-------------------- end main
