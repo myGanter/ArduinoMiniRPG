@@ -1,4 +1,4 @@
-#define DEBUG_MOD true
+#define DEBUG_MOD true //set to true to duplicate the full status in the serial port
 #define PRINT_LVL_TEXT true
 #define W 15
 #define H 10
