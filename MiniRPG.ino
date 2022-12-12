@@ -780,8 +780,6 @@ void LcdDrawMap(unsigned char x, unsigned char y)
   uint8_t lcdY = y % LcdH;
   uint8_t lcdX = x % LcdRenderW;
 
-  Lcd.clear();
-
   byte lcdIndexes[LcdW];
   ClearArr<byte>(lcdIndexes, LcdW, 255);
 
