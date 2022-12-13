@@ -1,11 +1,12 @@
 #define DEBUG_MOD true //set to true to duplicate the full status in the serial port
 #define PRINT_LVL_TEXT true
-#define W 15
+#define W 10
 #define H 10
 #define InputDelay 10
 #define GameLoopDelay 300
 #define LcdTextPrintDelay 300
 #define GameRenderDelay 125 //8 fps
+#define GlobalAnimationDelay 500
 #define ActivateRoomValue 1
 #define AxisThreshold 30 // % 
 #define MinMaxAxisValues 14000 // max for GY-521 ~ 20000
@@ -14,8 +15,8 @@
 #define LcdH 2 // if > 2 then refactor LcdDrawMap func
 #define LcdRenderW 8 // LcdW / 2
 #define LcdFogChar '#' //optionally 255 can be used
-#define PortalLeftChar '('
-#define PortalRightChar ')'
+#define PortalLeftChars "({"
+#define PortalRightChars ")}"
 
 #include "I2Cdev.h"
 #include "MPU6050.h"
@@ -87,6 +88,35 @@ char* StringConcatenate(const char *first, const char *second)
     return result;
 }
 //-------------------- end common
+
+
+//-------------------- animation container
+template<typename T> class AnimationContainer
+{
+  private:
+    T *_animList;
+    byte _count;
+    byte _currentIndex;
+  
+  public:
+    AnimationContainer(T *animList, byte count)
+    {
+      _animList = animList;
+      _count = count;
+      _currentIndex = 0;
+    }
+
+    void IncrementIndex()
+    {
+      _currentIndex = ++_currentIndex % _count;
+    }
+
+    T Current()
+    {
+      return _animList[_currentIndex];
+    }
+};
+//-------------------- end animation container
 
 
 //-------------------- time worker
@@ -677,6 +707,9 @@ const byte HeroChar[8] =
   B00000,
 };
 
+AnimationContainer<char> PortalLeftAnimation = AnimationContainer<char>(PortalLeftChars, 2);
+AnimationContainer<char> PortalRightAnimation = AnimationContainer<char>(PortalRightChars, 2);
+
 void InitLcd()
 {
   Lcd.begin(LcdH, LcdH);
@@ -802,8 +835,8 @@ void LcdDrawMap(unsigned char x, unsigned char y)
 
   if (x == Portal.X && y == Portal.Y)
   {
-    lcdIndexes[lcdX * 2] = (byte)PortalLeftChar;
-    lcdIndexes[lcdX * 2 + 1] = (byte)PortalRightChar;
+    lcdIndexes[lcdX * 2] = (byte)PortalLeftAnimation.Current();
+    lcdIndexes[lcdX * 2 + 1] = (byte)PortalRightAnimation.Current();
   }
   else
   {
@@ -818,8 +851,8 @@ void LcdDrawMap(unsigned char x, unsigned char y)
 
     if (newX == Portal.X && y == Portal.Y)
     {
-      lcdIndexes[nLcdX * 2] = (byte)PortalLeftChar;
-      lcdIndexes[nLcdX * 2 + 1] = (byte)PortalRightChar;
+      lcdIndexes[nLcdX * 2] = (byte)PortalLeftAnimation.Current();
+      lcdIndexes[nLcdX * 2 + 1] = (byte)PortalRightAnimation.Current();
     }
     else
     {
@@ -834,8 +867,8 @@ void LcdDrawMap(unsigned char x, unsigned char y)
 
     if (newX == Portal.X && y == Portal.Y)
     {
-      lcdIndexes[nLcdX * 2] = (byte)PortalLeftChar;
-      lcdIndexes[nLcdX * 2 + 1] = (byte)PortalRightChar;
+      lcdIndexes[nLcdX * 2] = (byte)PortalLeftAnimation.Current();
+      lcdIndexes[nLcdX * 2 + 1] = (byte)PortalRightAnimation.Current();
     }
     else
     {
@@ -852,8 +885,8 @@ void LcdDrawMap(unsigned char x, unsigned char y)
 
       if (x == Portal.X && incY == Portal.Y)
       {
-        lcd2RowIndexes[0] = (byte)PortalLeftChar;
-        lcd2RowIndexes[1] = (byte)PortalRightChar;
+        lcd2RowIndexes[0] = (byte)PortalLeftAnimation.Current();
+        lcd2RowIndexes[1] = (byte)PortalRightAnimation.Current();
       }
       else
       {
@@ -869,8 +902,8 @@ void LcdDrawMap(unsigned char x, unsigned char y)
 
       if (x == Portal.X && decY == Portal.Y)
       {
-        lcd2RowIndexes[0] = (byte)PortalLeftChar;
-        lcd2RowIndexes[1] = (byte)PortalRightChar;
+        lcd2RowIndexes[0] = (byte)PortalLeftAnimation.Current();
+        lcd2RowIndexes[1] = (byte)PortalRightAnimation.Current();
       }
       else
       {
@@ -1047,7 +1080,7 @@ void GameLogicWorkerClbk(bool eventExec)
 TimeWorker GameLogicWorker = TimeWorker(GameLoopDelay, GameLogicWorkerClbk, &InvokeGameLogicWorkerFlag);
 
 
-void LcdTextPrintWorkerClbk()
+void LcdTextPrintWorkerClbk(bool eventExec)
 {
 #if PRINT_LVL_TEXT
   if (!DrawChar())
@@ -1063,8 +1096,15 @@ void LcdTextPrintWorkerClbk()
     CurrentAppState = GameLoop;
   }
 }
-
 TimeWorker LcdTextPrintWorker = TimeWorker(LcdTextPrintDelay, LcdTextPrintWorkerClbk);
+
+
+void GlobalAnimationWorkerClbk(bool eventExec)
+{
+  PortalLeftAnimation.IncrementIndex();
+  PortalRightAnimation.IncrementIndex();
+}
+TimeWorker GlobalAnimationWorker = TimeWorker(GlobalAnimationDelay, GlobalAnimationWorkerClbk);
 //-------------------- end workers
 
 
@@ -1079,7 +1119,7 @@ void ArduinoOff()
 void setup() 
 {
   Serial.begin(9600);
-  randomSeed(analogRead(0));
+  randomSeed(analogRead(1));
   InitLcd();
   if (!InitAxis())
   {
@@ -1099,6 +1139,7 @@ void loop()
   {
     case GameLoop:
       GameLogicWorker.Update();
+      GlobalAnimationWorker.Update();
       GameRenderWorker.Update();
     break;
     case PrintInfo:
