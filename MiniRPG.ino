@@ -2,7 +2,10 @@
 #define PRINT_LVL_TEXT true
 #define W 15
 #define H 10
+#define InputDelay 10
 #define GameLoopDelay 300
+#define LcdTextPrintDelay 300
+#define GameRenderDelay 125 //8 fps
 #define ActivateRoomValue 1
 #define AxisThreshold 30 // % 
 #define MinMaxAxisValues 14000 // max for GY-521 ~ 20000
@@ -91,35 +94,44 @@ class TimeWorker
 {
   private:
     unsigned short _delay;
-    void (*_clbk)();
+    void (*_clbk)(bool);
     unsigned long _lastExecTime;
     bool *_eventInvokeFlag;
-  
+    bool _onlyEventInvoked;
+
   public:
-    TimeWorker(unsigned short delay, void (*clbk)(), bool *eventInvokeFlag)
+    TimeWorker(unsigned short delay, void (*clbk)(bool), bool *eventInvokeFlag = NULL, bool onlyEventInvoked = true)
     {
       _delay = delay;
       _clbk = clbk;
       _lastExecTime = millis();
       _eventInvokeFlag = eventInvokeFlag;
+      _onlyEventInvoked = onlyEventInvoked;
     }
 
     void Update()
     {
       unsigned long currentTime = millis();
       bool invoke = (currentTime - _lastExecTime) > _delay;
+      bool clbkArg = false;
 
       if (_eventInvokeFlag != NULL)
       {
-        invoke = invoke && (*_eventInvokeFlag);
+        invoke = (invoke && _onlyEventInvoked && (*_eventInvokeFlag)) || (!_onlyEventInvoked && (invoke || (*_eventInvokeFlag)));
+        clbkArg = (*_eventInvokeFlag);
         *_eventInvokeFlag = false;
       }
 
       if (invoke)
       {
-        (*_clbk)();
+        (*_clbk)(clbkArg);
         _lastExecTime = currentTime;
       }
+    }
+
+    void SetOnlyEventInvoked(bool value)
+    {
+      _onlyEventInvoked = value;
     }
 };
 //-------------------- end time worker
@@ -885,19 +897,31 @@ void LcdDrawMap(unsigned char x, unsigned char y)
   if (lcdY == 0)
     otherLcdY = 1;
 
-  Lcd.setCursor(0, otherLcdY);
+  byte lcdStartX = lcdX * 2;
 
-  for (byte i = 0; i < LcdW; ++i)
+  Lcd.setCursor(0, otherLcdY);
+  for (byte i = 0; i < lcdStartX; ++i)
   {
     Lcd.write((byte)LcdFogChar);
   }
 
-  if (lcd2RowIndexes[0] < 255)
+  Lcd.setCursor(lcdStartX + 2, otherLcdY);
+  for (byte i = lcdStartX + 2; i < LcdW; ++i)
   {
-    Lcd.setCursor(lcdX * 2, otherLcdY);
+    Lcd.write((byte)LcdFogChar);
+  }
+
+  Lcd.setCursor(lcdX * 2, otherLcdY);
+  if (lcd2RowIndexes[0] < 255)
+  {    
     Lcd.write(lcd2RowIndexes[0]);
     Lcd.write(lcd2RowIndexes[1]);
-  }  
+  }
+  else
+  {
+    Lcd.write((byte)LcdFogChar);
+    Lcd.write((byte)LcdFogChar);
+  }
 }
 
 char *LcdText = NULL;
@@ -958,11 +982,17 @@ bool DrawChar()
   return false;  
 }
 
-void DrawGame()
-{
 #if DEBUG_MOD
+void DrawGame(bool eventExec)
+{
+  if (eventExec)
+  {
     DrawMap();
     PrintHeroAndPortalCoord();
+  }    
+#else
+void DrawGame()
+{
 #endif    
     
   LcdDrawMap(Hero.X, Hero.Y);
@@ -971,36 +1001,50 @@ void DrawGame()
 
 
 //-------------------- workers
-bool InvokeGameWorkerFlag = false;
+bool InvokeGameLogicWorkerFlag = false;
+bool InvokeGameRenderWorkerFlag = false;
 
-void InputWorkerClbk()
+
+void InputWorkerClbk(bool eventExec)
 {
   LastAxisDiraction = GetAxisDiraction();
 
   if (LastAxisDiraction != ZeroDiraction)
-    InvokeGameWorkerFlag = true;
+    InvokeGameLogicWorkerFlag = true;
 }
+TimeWorker InputWorker = TimeWorker(InputDelay, InputWorkerClbk);
 
-TimeWorker InputWorker = TimeWorker(10, InputWorkerClbk, NULL);
+
+void GameRenderWorkerClbk(bool eventExec)
+{
+#if DEBUG_MOD
+  DrawGame(eventExec);   
+#else
+  DrawGame();
+#endif
+}
+TimeWorker GameRenderWorker = TimeWorker(GameRenderDelay, GameRenderWorkerClbk, &InvokeGameRenderWorkerFlag, false);
 
 
-void GameWorkerClbk()
+void GameLogicWorkerClbk(bool eventExec)
 {
   if (Hero.X == Portal.X && Hero.Y == Portal.Y)
-  {
-    CurrentAppState = PrintInfo;
+  {    
     LvlCounter++;
     Hero.X = 0;
     Hero.Y = 0;
+
     InitLcdText();
+    GameRenderWorker.SetOnlyEventInvoked(true);
+
+    CurrentAppState = PrintInfo;
   }
   else if (HeroMoveTo(LastAxisDiraction))
   {
-    DrawGame();
+    InvokeGameRenderWorkerFlag = true;
   }
 }
-
-TimeWorker GameWorker = TimeWorker(GameLoopDelay, GameWorkerClbk, &InvokeGameWorkerFlag);
+TimeWorker GameLogicWorker = TimeWorker(GameLoopDelay, GameLogicWorkerClbk, &InvokeGameLogicWorkerFlag);
 
 
 void LcdTextPrintWorkerClbk()
@@ -1014,13 +1058,13 @@ void LcdTextPrintWorkerClbk()
     ClearMap();
     GenerateMap();
     InitPortalPoint();
-    CurrentAppState = GameLoop;
+    GameRenderWorker.SetOnlyEventInvoked(false);
 
-    DrawGame();
+    CurrentAppState = GameLoop;
   }
 }
 
-TimeWorker LcdTextPrintWorker = TimeWorker(300, LcdTextPrintWorkerClbk, NULL);
+TimeWorker LcdTextPrintWorker = TimeWorker(LcdTextPrintDelay, LcdTextPrintWorkerClbk);
 //-------------------- end workers
 
 
@@ -1054,7 +1098,8 @@ void loop()
   switch (CurrentAppState)
   {
     case GameLoop:
-      GameWorker.Update();
+      GameLogicWorker.Update();
+      GameRenderWorker.Update();
     break;
     case PrintInfo:
       LcdTextPrintWorker.Update();
