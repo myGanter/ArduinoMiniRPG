@@ -97,12 +97,14 @@ template<typename T> class AnimationContainer
     T *_animList;
     byte _count;
     byte _currentIndex;
-  
+    byte _size;
+
   public:
-    AnimationContainer(T *animList, byte count)
+    AnimationContainer(T *animList, byte count, byte size)
     {
       _animList = animList;
       _count = count;
+      _size = size;
       _currentIndex = 0;
     }
 
@@ -111,9 +113,9 @@ template<typename T> class AnimationContainer
       _currentIndex = ++_currentIndex % _count;
     }
 
-    T Current()
+    T* Current()
     {
-      return _animList[_currentIndex];
+      return &_animList[_currentIndex * _size];
     }
 };
 //-------------------- end animation container
@@ -695,20 +697,33 @@ const byte BottomWall[8] =
   B11111,
 };
 
-const byte HeroChar[8] = 
+const byte HeroChars[2][8] = 
 {
-  B00000,
-  B00000,
-  B00010,
-  B00100,
-  B00100,
-  B01010,
-  B00000,
-  B00000,
+  {
+    B00000,
+    B00000,
+    B00010,
+    B00100,
+    B00100,
+    B01010,
+    B00000,
+    B00000, 
+  },
+  {
+    B00000,
+    B00000,
+    B00010,
+    B00100,
+    B00100,
+    B00100,
+    B00000,
+    B00000, 
+  }
 };
 
-AnimationContainer<char> PortalLeftAnimation = AnimationContainer<char>(PortalLeftChars, 2);
-AnimationContainer<char> PortalRightAnimation = AnimationContainer<char>(PortalRightChars, 2);
+AnimationContainer<byte> HeroAnimation = AnimationContainer<byte>(HeroChars[0], 2, sizeof(byte) * 8);
+AnimationContainer<char> PortalLeftAnimation = AnimationContainer<char>(PortalLeftChars, 2, sizeof(char));
+AnimationContainer<char> PortalRightAnimation = AnimationContainer<char>(PortalRightChars, 2, sizeof(char));
 
 void InitLcd()
 {
@@ -817,7 +832,7 @@ void ReconfigureFirstHeroChar(byte lcdIndexes[], byte chars[][8], uint8_t lcdX, 
     lcdIndexes[lcdX * 2 + 1] = 1;
   }
 
-  MergeChars(chars[(int)HeroPosIsRightChar], HeroChar);
+  MergeChars(chars[(int)HeroPosIsRightChar], HeroAnimation.Current());
 }
 
 void LcdDrawMap(unsigned char x, unsigned char y)
@@ -835,8 +850,8 @@ void LcdDrawMap(unsigned char x, unsigned char y)
 
   if (x == Portal.X && y == Portal.Y)
   {
-    lcdIndexes[lcdX * 2] = (byte)PortalLeftAnimation.Current();
-    lcdIndexes[lcdX * 2 + 1] = (byte)PortalRightAnimation.Current();
+    lcdIndexes[lcdX * 2] = (byte)*PortalLeftAnimation.Current();
+    lcdIndexes[lcdX * 2 + 1] = (byte)*PortalRightAnimation.Current();
   }
   else
   {
@@ -851,8 +866,8 @@ void LcdDrawMap(unsigned char x, unsigned char y)
 
     if (newX == Portal.X && y == Portal.Y)
     {
-      lcdIndexes[nLcdX * 2] = (byte)PortalLeftAnimation.Current();
-      lcdIndexes[nLcdX * 2 + 1] = (byte)PortalRightAnimation.Current();
+      lcdIndexes[nLcdX * 2] = (byte)*PortalLeftAnimation.Current();
+      lcdIndexes[nLcdX * 2 + 1] = (byte)*PortalRightAnimation.Current();
     }
     else
     {
@@ -867,8 +882,8 @@ void LcdDrawMap(unsigned char x, unsigned char y)
 
     if (newX == Portal.X && y == Portal.Y)
     {
-      lcdIndexes[nLcdX * 2] = (byte)PortalLeftAnimation.Current();
-      lcdIndexes[nLcdX * 2 + 1] = (byte)PortalRightAnimation.Current();
+      lcdIndexes[nLcdX * 2] = (byte)*PortalLeftAnimation.Current();
+      lcdIndexes[nLcdX * 2 + 1] = (byte)*PortalRightAnimation.Current();
     }
     else
     {
@@ -885,8 +900,8 @@ void LcdDrawMap(unsigned char x, unsigned char y)
 
       if (x == Portal.X && incY == Portal.Y)
       {
-        lcd2RowIndexes[0] = (byte)PortalLeftAnimation.Current();
-        lcd2RowIndexes[1] = (byte)PortalRightAnimation.Current();
+        lcd2RowIndexes[0] = (byte)*PortalLeftAnimation.Current();
+        lcd2RowIndexes[1] = (byte)*PortalRightAnimation.Current();
       }
       else
       {
@@ -902,8 +917,8 @@ void LcdDrawMap(unsigned char x, unsigned char y)
 
       if (x == Portal.X && decY == Portal.Y)
       {
-        lcd2RowIndexes[0] = (byte)PortalLeftAnimation.Current();
-        lcd2RowIndexes[1] = (byte)PortalRightAnimation.Current();
+        lcd2RowIndexes[0] = (byte)*PortalLeftAnimation.Current();
+        lcd2RowIndexes[1] = (byte)*PortalRightAnimation.Current();
       }
       else
       {
@@ -1073,7 +1088,7 @@ void GameLogicWorkerClbk(bool eventExec)
     CurrentAppState = PrintInfo;
   }
   else if (HeroMoveTo(LastAxisDiraction))
-  {
+  {    
     InvokeGameRenderWorkerFlag = true;
   }
 }
@@ -1103,6 +1118,7 @@ void GlobalAnimationWorkerClbk(bool eventExec)
 {
   PortalLeftAnimation.IncrementIndex();
   PortalRightAnimation.IncrementIndex();
+  HeroAnimation.IncrementIndex();
 }
 TimeWorker GlobalAnimationWorker = TimeWorker(GlobalAnimationDelay, GlobalAnimationWorkerClbk);
 //-------------------- end workers
