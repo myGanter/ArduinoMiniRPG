@@ -1,22 +1,30 @@
-#define DEBUG_MOD true //set to true to duplicate the full status in the serial port
-#define PRINT_LVL_TEXT true
-#define W 10
+#define DEBUG_MOD false //set to true to duplicate the full status in the serial port
+#define PRINT_LVL_TEXT false
+
+#define W 15
 #define H 10
-#define InputDelay 10
-#define GameLoopDelay 300
-#define LcdTextPrintDelay 300
-#define GameRenderDelay 125 //8 fps
-#define GlobalAnimationDelay 500
+#define LcdW 16
+#define LcdH 2 // if > 2 then refactor LcdDrawMap func
+#define LcdRenderW 8 // LcdW / 2
 #define ActivateRoomValue 1
 #define AxisThreshold 30 // % 
 #define MinMaxAxisValues 14000 // max for GY-521 ~ 20000
 #define StartMinMaxAxisValues 10000
-#define LcdW 16
-#define LcdH 2 // if > 2 then refactor LcdDrawMap func
-#define LcdRenderW 8 // LcdW / 2
+
+#define InputDelay 10
+#define HeroMoveDelay 300
+#define LcdTextPrintDelay 300
+#define GameRenderDelay 200 //5 fps
+#define GlobalAnimationDelay 500
+#define BombExplosionDelay 3000
+#define BombExplosionSpreadDelay 500
+#define MinimumBombExplosionActionTime 4000
+
 #define LcdFogChar '#' //optionally 255 can be used
 #define PortalLeftChars "({"
 #define PortalRightChars ")}"
+#define BombChars "@ "
+#define ExplosionChars "-+*O*O*O*O*O*O"
 
 #include "I2Cdev.h"
 #include "MPU6050.h"
@@ -41,6 +49,16 @@ enum Diraction : unsigned char
   Bottom = 1 << 2,
   Left = 1 << 3,
   ZeroDiraction = 1 << 4,
+};
+
+enum ButtonValue : unsigned char
+{
+  TopButton = 1 << 0,
+  RightButton = 1 << 1,
+  BottomButton = 1 << 2,
+  LeftButton = 1 << 3,
+  SelectButton = 1 << 4,
+  NoneButton = 1 << 5,
 };
 
 enum AppState : unsigned char
@@ -98,19 +116,35 @@ template<typename T> class AnimationContainer
     byte _count;
     byte _currentIndex;
     byte _size;
+    unsigned short _speedSwichFrame;
+    unsigned long _lastExecTime;
 
   public:
-    AnimationContainer(T *animList, byte count, byte size)
+    AnimationContainer(T *animList, byte count, byte size, unsigned short speedSwichFrame)
     {
       _animList = animList;
       _count = count;
-      _size = size;
+      _size = size;      
+      _speedSwichFrame = speedSwichFrame;
+
+      Reset();
+    }
+
+    void Reset()
+    {
       _currentIndex = 0;
+      _lastExecTime = millis();
     }
 
     void IncrementIndex()
     {
-      _currentIndex = ++_currentIndex % _count;
+      unsigned long currentTime = millis();
+
+      if ((currentTime - _lastExecTime) > _speedSwichFrame)
+      {
+        _currentIndex = ++_currentIndex % _count;
+        _lastExecTime = currentTime;
+      }      
     }
 
     T* Current()
@@ -132,6 +166,9 @@ class TimeWorker
     bool _onlyEventInvoked;
 
   public:
+    //eventInvokeFlag - clbk вызывается сразу же, когда eventInvokeFlag = true.
+    //onlyEventInvoked - Если true, делает вызов clbk только по eventInvokeFlag, при этом между вызовами должно пройти delay или больше времени.
+    //  Если false, вызывает постоянно дополнительно по таймеру.
     TimeWorker(unsigned short delay, void (*clbk)(bool), bool *eventInvokeFlag = NULL, bool onlyEventInvoked = true)
     {
       _delay = delay;
@@ -179,6 +216,37 @@ template<typename T> class Node
     {
       Value = value;
       NextNode = nextNode;
+    }
+};
+
+template<typename T> class NodeIterator
+{
+  private:
+    Node<T>* _currentNode;
+
+  public:
+    NodeIterator(Node<T> *startNode)
+    {
+      _currentNode = startNode;
+    }
+
+    bool MoveNext()
+    {
+      if (_currentNode->NextNode == NULL)
+        return false;
+
+      _currentNode = _currentNode->NextNode;
+      return true;
+    }
+
+    T GetValue()
+    {
+      return _currentNode->Value;
+    }
+
+    void SetValue(T value)
+    {
+      _currentNode->Value = value;
     }
 };
 
@@ -260,6 +328,11 @@ template<typename T> class Stack
     unsigned int Count()
     {
       return _count;
+    }
+
+    NodeIterator<T>* CreateIterator()
+    {
+      return new NodeIterator<T>(_currentNode);
     }
 };
 //-------------------- end stack
@@ -353,11 +426,22 @@ Diraction GetAxisDiraction()
 //-------------------- global game vars
 Room Map[H][W];
 Point Hero = { .X = 0, .Y = 0 };
-Point Portal = { .X = 0, .Y = 0 };
 bool HeroPosIsRightChar = false;
+Point Portal = { .X = 0, .Y = 0 };
 Diraction LastAxisDiraction = ZeroDiraction;
 AppState CurrentAppState = PrintInfo;
 unsigned int LvlCounter = 0;
+ButtonValue Button = NoneButton;
+
+//--BOMB--
+Point *Bomb = NULL;
+bool BombIsRight = false;
+bool BombIsExplosion = false;
+Stack<Point> *ExplosionPoints = NULL;
+Point ExplosionTop = { .X = 0, .Y = 0 };
+Point ExplosionRight = { .X = 0, .Y = 0 };
+Point ExplosionLeft = { .X = 0, .Y = 0 };
+Point ExplosionBottom = { .X = 0, .Y = 0 };
 //-------------------- end global game vars
 
 
@@ -645,6 +729,41 @@ bool HeroMoveTo(Diraction diraction)
 
   return false;
 }
+
+bool ExplosionPropagation()
+{
+  bool propagate = false;
+
+  if (CheckTopRoomAvailable(ExplosionTop.X, ExplosionTop.Y))
+  {
+    ExplosionTop.Y--;
+    ExplosionPoints->Push(ExplosionTop);
+    propagate = true;
+  }
+
+  if (CheckRightRoomAvailable(ExplosionRight.X, ExplosionRight.Y))
+  {
+    ExplosionRight.X++;
+    ExplosionPoints->Push(ExplosionRight);
+    propagate = true;
+  }
+
+  if (CheckBottomRoomAvailable(ExplosionBottom.X, ExplosionBottom.Y))
+  {
+    ExplosionBottom.Y++;
+    ExplosionPoints->Push(ExplosionBottom);
+    propagate = true;
+  }
+
+  if (CheckLeftRoomAvailable(ExplosionLeft.X, ExplosionLeft.Y))
+  {
+    ExplosionLeft.X--;
+    ExplosionPoints->Push(ExplosionLeft);
+    propagate = true;
+  }
+
+  return propagate;
+}
 //-------------------- end hero
 
 
@@ -721,9 +840,11 @@ const byte HeroChars[2][8] =
   }
 };
 
-AnimationContainer<byte> HeroAnimation = AnimationContainer<byte>(HeroChars[0], 2, sizeof(byte) * 8);
-AnimationContainer<char> PortalLeftAnimation = AnimationContainer<char>(PortalLeftChars, 2, sizeof(char));
-AnimationContainer<char> PortalRightAnimation = AnimationContainer<char>(PortalRightChars, 2, sizeof(char));
+AnimationContainer<byte> HeroAnimation = AnimationContainer<byte>(HeroChars[0], 2, sizeof(byte) * 8, GlobalAnimationDelay);
+AnimationContainer<char> PortalLeftAnimation = AnimationContainer<char>(PortalLeftChars, 2, sizeof(char), GlobalAnimationDelay);
+AnimationContainer<char> PortalRightAnimation = AnimationContainer<char>(PortalRightChars, 2, sizeof(char), GlobalAnimationDelay);
+AnimationContainer<char> BombAnimation = AnimationContainer<char>(BombChars, 2, sizeof(char), GlobalAnimationDelay / 2);
+AnimationContainer<char> ExplosionAnimation = AnimationContainer<char>(ExplosionChars, 14, sizeof(char), BombExplosionSpreadDelay);
 
 void InitLcd()
 {
@@ -780,10 +901,10 @@ byte FindIndexChar(byte chars[][8], byte char1[], byte maxChars)
   return 255;
 }
 
-void LcdCacheCreateChar(unsigned char x, unsigned char y, byte lcdIndexes[], byte chars[][8], uint8_t lcdX, byte *maxCharIndex)
+void LcdCacheCreateChar(unsigned char x, unsigned char y, byte lcdIndexes[], byte chars[][8], uint8_t lcdX, byte *maxCharIndex, Diraction charExist)
 {
   Diraction currentPos = GetRoomDiractions(x, y);
-
+  
   CreateRoomLeftChar(chars[*maxCharIndex], currentPos);
   byte findIndex = FindIndexChar(chars, chars[*maxCharIndex], *maxCharIndex);
   if (findIndex == 255)
@@ -796,14 +917,15 @@ void LcdCacheCreateChar(unsigned char x, unsigned char y, byte lcdIndexes[], byt
     ClearArr<byte>(chars[*maxCharIndex], 8, 0);
   }
 
-  lcdIndexes[lcdX * 2] = findIndex;
-
+  if ((charExist & Left) != Left)
+  {
+    lcdIndexes[lcdX * 2] = findIndex;
+  }
+  
   CreateRoomRightChar(chars[*maxCharIndex], currentPos);
   if (EqualChars(chars[*maxCharIndex], chars[findIndex]))
   {
     ClearArr<byte>(chars[*maxCharIndex], 8, 0);
-
-    lcdIndexes[lcdX * 2 + 1] = findIndex;
   }
   else
   {
@@ -817,22 +939,99 @@ void LcdCacheCreateChar(unsigned char x, unsigned char y, byte lcdIndexes[], byt
     else
     {
       ClearArr<byte>(chars[*maxCharIndex], 8, 0);
-    }
-
-    lcdIndexes[lcdX * 2 + 1] = findIndex;
+    }    
   } 
+
+  if ((charExist & RightDiraction) != RightDiraction)
+  {
+    lcdIndexes[lcdX * 2 + 1] = findIndex;
+  }
 }
 
 void ReconfigureFirstHeroChar(byte lcdIndexes[], byte chars[][8], uint8_t lcdX, byte *maxCharIndex)
 {
+  int lcdIndex = lcdX * 2;
+  bool rightFree = lcdIndexes[lcdIndex + 1] < 8;
+  bool allFree = lcdIndexes[lcdIndex] < 8 && rightFree;
+
   if ((*maxCharIndex) < 2)
   {
     (*maxCharIndex)++;
     MergeChars(chars[1], chars[0]);
-    lcdIndexes[lcdX * 2 + 1] = 1;
+
+    if (rightFree)
+      lcdIndexes[lcdIndex + 1] = 1;
   }
 
-  MergeChars(chars[(int)HeroPosIsRightChar], HeroAnimation.Current());
+  MergeChars(chars[(allFree || (*maxCharIndex) == 2 ? (int)HeroPosIsRightChar : 0)], HeroAnimation.Current());
+}
+
+bool LcdCheckExplosionPoint(unsigned char x, unsigned char y)
+{
+  NodeIterator<Point> *iterator = ExplosionPoints->CreateIterator();
+
+  do
+  {
+    Point p = iterator->GetValue();
+    if (p.X == x && p.Y == y)
+    {
+      delete iterator;
+      return true;
+    }
+  } 
+  while (iterator->MoveNext());       
+
+  delete iterator;
+  return false;
+}
+
+Diraction LcdCacheCreateCharCheckExistingGameObjs(unsigned char x, unsigned char y, byte lcdIndexes[], int leftIndex, int rightIndex)
+{
+  byte bombChar = (byte)*BombAnimation.Current();
+
+  if (x == Portal.X && y == Portal.Y)
+  {
+    lcdIndexes[leftIndex] = (byte)*PortalLeftAnimation.Current();
+    lcdIndexes[rightIndex] = (byte)*PortalRightAnimation.Current();
+  }
+  else if (Bomb != NULL && (bombChar != (byte)' ' || BombIsExplosion) && x == Bomb->X && y == Bomb->Y)
+  {
+    lcdIndexes[BombIsRight ? rightIndex : leftIndex] = bombChar;
+
+    if (BombIsExplosion)
+    {
+      lcdIndexes[BombIsRight ? leftIndex : rightIndex] = (byte)*ExplosionAnimation.Current();
+
+      if (bombChar == (byte)' ')
+        return BombIsRight ? Left : RightDiraction;
+    }
+    else
+    {
+      return BombIsRight ? RightDiraction : Left;
+    }
+  }
+  else if (ExplosionPoints != NULL && ExplosionPoints->Count() > 0 && LcdCheckExplosionPoint(x, y))
+  {
+    byte explosionChar = (byte)*ExplosionAnimation.Current();
+
+    lcdIndexes[leftIndex] = explosionChar;
+    lcdIndexes[rightIndex] = explosionChar;
+  }
+  else
+  {
+    return ZeroDiraction;
+  }
+
+  return RightDiraction | Left;
+}
+
+bool LcdCacheCreateCharCheckExistingGameObjsOrDefault(unsigned char x, unsigned char y, byte lcdIndexes[], byte chars[][8], byte *maxCharIndex)
+{
+  uint8_t nLcdX = x % LcdRenderW;
+  Diraction existingSet = LcdCacheCreateCharCheckExistingGameObjs(x, y, lcdIndexes, nLcdX * 2, nLcdX * 2 + 1);
+  LcdCacheCreateChar(x, y, lcdIndexes, chars, nLcdX, maxCharIndex, existingSet);
+
+  return existingSet == (RightDiraction | Left);
 }
 
 void LcdDrawMap(unsigned char x, unsigned char y)
@@ -848,85 +1047,29 @@ void LcdDrawMap(unsigned char x, unsigned char y)
   for (int i = 0; i < 8; ++i)
     ClearArr<byte>(chars[i], 8, 0);
 
-  if (x == Portal.X && y == Portal.Y)
-  {
-    lcdIndexes[lcdX * 2] = (byte)*PortalLeftAnimation.Current();
-    lcdIndexes[lcdX * 2 + 1] = (byte)*PortalRightAnimation.Current();
-  }
-  else
-  {
-    LcdCacheCreateChar(x, y, lcdIndexes, chars, lcdX, &maxCharIndex);
+  if (!LcdCacheCreateCharCheckExistingGameObjsOrDefault(x, y, lcdIndexes, chars, &maxCharIndex))
     ReconfigureFirstHeroChar(lcdIndexes, chars, lcdX, &maxCharIndex);
-  }
 
   unsigned char newX = x;
   while (CheckLeftRoomAvailable(newX--, y) && (newX % LcdRenderW) < lcdX)
   {
-    uint8_t nLcdX = newX % LcdRenderW;
-
-    if (newX == Portal.X && y == Portal.Y)
-    {
-      lcdIndexes[nLcdX * 2] = (byte)*PortalLeftAnimation.Current();
-      lcdIndexes[nLcdX * 2 + 1] = (byte)*PortalRightAnimation.Current();
-    }
-    else
-    {
-      LcdCacheCreateChar(newX, y, lcdIndexes, chars, nLcdX, &maxCharIndex);
-    }
+    LcdCacheCreateCharCheckExistingGameObjsOrDefault(newX, y, lcdIndexes, chars, &maxCharIndex);
   }
 
   newX = x;
   while (CheckRightRoomAvailable(newX++, y) && (newX % LcdRenderW) > lcdX)
   {
-    uint8_t nLcdX = newX % LcdRenderW;
-
-    if (newX == Portal.X && y == Portal.Y)
-    {
-      lcdIndexes[nLcdX * 2] = (byte)*PortalLeftAnimation.Current();
-      lcdIndexes[nLcdX * 2 + 1] = (byte)*PortalRightAnimation.Current();
-    }
-    else
-    {
-      LcdCacheCreateChar(newX, y, lcdIndexes, chars, nLcdX, &maxCharIndex);
-    }
+    LcdCacheCreateCharCheckExistingGameObjsOrDefault(newX, y, lcdIndexes, chars, &maxCharIndex);
   }
 
-  byte lcd2RowIndexes[2] = { 255, 255 };
-  if (lcdY == 0)
+  byte lcd2RowIndexes[2] = { (byte)LcdFogChar, (byte)LcdFogChar };
+  if (lcdY == 0 && CheckBottomRoomAvailable(x, y) || lcdY == 1 && CheckTopRoomAvailable(x, y))
   {
-    if (CheckBottomRoomAvailable(x, y))
-    {
-      unsigned char incY = y + 1;
-
-      if (x == Portal.X && incY == Portal.Y)
-      {
-        lcd2RowIndexes[0] = (byte)*PortalLeftAnimation.Current();
-        lcd2RowIndexes[1] = (byte)*PortalRightAnimation.Current();
-      }
-      else
-      {
-        LcdCacheCreateChar(x, incY, lcd2RowIndexes, chars, 0, &maxCharIndex);
-      }
-    }
+    unsigned char newY = y + (lcdY == 0 ? 1 : -1);
+    Diraction existingSet = LcdCacheCreateCharCheckExistingGameObjs(x, newY, lcd2RowIndexes, 0, 1);
+    LcdCacheCreateChar(x, newY, lcd2RowIndexes, chars, 0, &maxCharIndex, existingSet);
   }
-  else
-  {
-    if (CheckTopRoomAvailable(x, y))
-    {
-      unsigned char decY = y - 1;
-
-      if (x == Portal.X && decY == Portal.Y)
-      {
-        lcd2RowIndexes[0] = (byte)*PortalLeftAnimation.Current();
-        lcd2RowIndexes[1] = (byte)*PortalRightAnimation.Current();
-      }
-      else
-      {
-        LcdCacheCreateChar(x, decY, lcd2RowIndexes, chars, 0, &maxCharIndex);
-      }
-    }      
-  }
-
+  
   for (int i = 0; i < maxCharIndex; ++i)
   {
     Lcd.createChar(i, chars[i]);
@@ -941,10 +1084,7 @@ void LcdDrawMap(unsigned char x, unsigned char y)
       Lcd.write((byte)LcdFogChar);
   }
 
-  uint8_t otherLcdY = 0;
-  if (lcdY == 0)
-    otherLcdY = 1;
-
+  uint8_t otherLcdY = lcdY == 0 ? 1 : 0;
   byte lcdStartX = lcdX * 2;
 
   Lcd.setCursor(0, otherLcdY);
@@ -960,16 +1100,8 @@ void LcdDrawMap(unsigned char x, unsigned char y)
   }
 
   Lcd.setCursor(lcdX * 2, otherLcdY);
-  if (lcd2RowIndexes[0] < 255)
-  {    
-    Lcd.write(lcd2RowIndexes[0]);
-    Lcd.write(lcd2RowIndexes[1]);
-  }
-  else
-  {
-    Lcd.write((byte)LcdFogChar);
-    Lcd.write((byte)LcdFogChar);
-  }
+  Lcd.write(lcd2RowIndexes[0]);
+  Lcd.write(lcd2RowIndexes[1]);
 }
 
 char *LcdText = NULL;
@@ -1049,8 +1181,11 @@ void DrawGame()
 
 
 //-------------------- workers
-bool InvokeGameLogicWorkerFlag = false;
+bool InvokeHeroMoveWorkerFlag = false;
 bool InvokeGameRenderWorkerFlag = false;
+bool InvokeHeroBombWorkerFlag = false;
+bool BombExplosionWorkerFlag = false;
+byte BombExplosionWorkerCounter = 0;
 
 
 void InputWorkerClbk(bool eventExec)
@@ -1058,7 +1193,21 @@ void InputWorkerClbk(bool eventExec)
   LastAxisDiraction = GetAxisDiraction();
 
   if (LastAxisDiraction != ZeroDiraction)
-    InvokeGameLogicWorkerFlag = true;
+    InvokeHeroMoveWorkerFlag = true;
+
+  int buttonValue = analogRead(0);
+  if (buttonValue < 100) 
+    Button = TopButton;
+  else if (buttonValue < 200) 
+    Button = TopButton;
+  else if (buttonValue < 400)
+    Button = BottomButton;
+  else if (buttonValue < 600)
+    Button = LeftButton;
+  else if (buttonValue < 800)
+    Button = SelectButton;
+  else
+    Button = NoneButton;
 }
 TimeWorker InputWorker = TimeWorker(InputDelay, InputWorkerClbk);
 
@@ -1074,8 +1223,11 @@ void GameRenderWorkerClbk(bool eventExec)
 TimeWorker GameRenderWorker = TimeWorker(GameRenderDelay, GameRenderWorkerClbk, &InvokeGameRenderWorkerFlag, false);
 
 
-void GameLogicWorkerClbk(bool eventExec)
+void HeroMoveWorkerClbk(bool eventExec)
 {
+  Point pastHero = Hero;
+  bool pastHeroPosIsRightChar = HeroPosIsRightChar;
+
   if (Hero.X == Portal.X && Hero.Y == Portal.Y)
   {    
     LvlCounter++;
@@ -1088,11 +1240,89 @@ void GameLogicWorkerClbk(bool eventExec)
     CurrentAppState = PrintInfo;
   }
   else if (HeroMoveTo(LastAxisDiraction))
-  {    
-    InvokeGameRenderWorkerFlag = true;
+  {
+    if (Bomb != NULL && Hero.X == Bomb->X && Hero.Y == Bomb->Y && HeroPosIsRightChar == BombIsRight)
+    {
+      Hero = pastHero;
+      HeroPosIsRightChar = pastHeroPosIsRightChar;
+    }
+    else
+    {
+      InvokeGameRenderWorkerFlag = true;
+    }
   }
 }
-TimeWorker GameLogicWorker = TimeWorker(GameLoopDelay, GameLogicWorkerClbk, &InvokeGameLogicWorkerFlag);
+TimeWorker HeroMoveWorker = TimeWorker(HeroMoveDelay, HeroMoveWorkerClbk, &InvokeHeroMoveWorkerFlag);
+
+
+void BombExplosionWorkerClbk(bool eventExec)
+{
+  if (!BombIsExplosion)
+    return;
+
+  if (!ExplosionPropagation() && (BombExplosionSpreadDelay * BombExplosionWorkerCounter) >= MinimumBombExplosionActionTime)
+  {
+    BombIsExplosion = false;
+
+    Point *currentBomb = Bomb;
+    Bomb = NULL;
+    delete currentBomb;
+
+    Stack<Point> *currentExplosionPoints = ExplosionPoints;
+    ExplosionPoints->Clear();
+    ExplosionPoints = NULL;
+    delete currentExplosionPoints;
+  }
+  else
+  {
+    BombExplosionWorkerCounter++;
+  }
+}
+TimeWorker BombExplosionWorker = TimeWorker(BombExplosionSpreadDelay, BombExplosionWorkerClbk, &BombExplosionWorkerFlag, false);
+
+
+void HeroBombWorkerClbk(bool eventExec)
+{
+  if (eventExec)
+    return;
+
+  if (!BombIsExplosion)
+  {
+    BombIsExplosion = true;
+    BombExplosionWorkerFlag = true;
+    ExplosionPoints = new Stack<Point>();
+    ExplosionTop = *Bomb;
+    ExplosionRight = ExplosionTop;
+    ExplosionLeft = ExplosionTop;
+    ExplosionBottom = ExplosionTop;
+    ExplosionAnimation.Reset();
+    BombExplosionWorkerCounter = 0;
+  }  
+}
+TimeWorker HeroBombWorker = TimeWorker(BombExplosionDelay, HeroBombWorkerClbk, &InvokeHeroBombWorkerFlag, false);
+
+
+void GameLogicWorkerClbk(bool eventExec)
+{ 
+  HeroMoveWorker.Update();
+
+  if (Button == SelectButton && Bomb == NULL)
+  {
+    BombIsRight = !HeroPosIsRightChar;
+    Bomb = new Point();
+    Bomb->X = Hero.X;
+    Bomb->Y = Hero.Y;
+
+    InvokeHeroBombWorkerFlag = true;
+    InvokeGameRenderWorkerFlag = true;
+  }
+  else if (Bomb != NULL)
+  {
+    HeroBombWorker.Update();
+    BombExplosionWorker.Update();
+  }
+}
+TimeWorker GameLogicWorker = TimeWorker(InputDelay, GameLogicWorkerClbk);
 
 
 void LcdTextPrintWorkerClbk(bool eventExec)
@@ -1119,8 +1349,10 @@ void GlobalAnimationWorkerClbk(bool eventExec)
   PortalLeftAnimation.IncrementIndex();
   PortalRightAnimation.IncrementIndex();
   HeroAnimation.IncrementIndex();
+  BombAnimation.IncrementIndex();
+  ExplosionAnimation.IncrementIndex();
 }
-TimeWorker GlobalAnimationWorker = TimeWorker(GlobalAnimationDelay, GlobalAnimationWorkerClbk);
+TimeWorker GlobalAnimationWorker = TimeWorker(GameRenderDelay, GlobalAnimationWorkerClbk);
 //-------------------- end workers
 
 
