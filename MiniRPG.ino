@@ -1,4 +1,4 @@
-#define DEBUG_MOD false //set to true to duplicate the full status in the serial port
+#define DEBUG_MOD true //set to true to duplicate the full status in the serial port
 #define PRINT_LVL_TEXT false
 
 #define W 15
@@ -1154,11 +1154,6 @@ bool DrawChar()
   }
 #endif
 
-  char *ptr = LcdText;
-  LcdText = NULL;
-  delete ptr;
-  TextIndex = 0;
-  TextOffSet = 0;
   return false;  
 }
 
@@ -1333,6 +1328,12 @@ void LcdTextPrintWorkerClbk(bool eventExec)
   if (true)
 #endif
   {
+    char *ptr = LcdText;
+    LcdText = NULL;
+    delete ptr;
+    TextIndex = 0;
+    TextOffSet = 0;
+
     ClearMap();
     GenerateMap();
     InitPortalPoint();
