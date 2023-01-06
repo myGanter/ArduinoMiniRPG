@@ -1,5 +1,5 @@
 #define DEBUG_MOD true //set to true to duplicate the full status in the serial port
-#define PRINT_LVL_TEXT false
+#define PRINT_LVL_TEXT true
 
 #define W 15
 #define H 10
@@ -340,7 +340,7 @@ template<typename T> class Stack
 
 //-------------------- lib vars
 MPU6050 CY531;
-LiquidCrystal Lcd(8, 9, 4, 5, 6, 7);
+LiquidCrystal Lcd(11, 12, 2, 3, 4, 5, 6, 7, 8, 9);
 //-------------------- end lib vars
 
 
@@ -849,10 +849,10 @@ AnimationContainer<char> ExplosionAnimation = AnimationContainer<char>(Explosion
 void InitLcd()
 {
   Lcd.begin(LcdH, LcdH);
+  Lcd.clear();
   Lcd.noCursor();
   Lcd.noBlink();
   Lcd.noAutoscroll();
-  Lcd.clear();
 }
 
 void MergeChars(byte target[], byte source[])
