@@ -427,10 +427,11 @@ Diraction GetAxisDiraction()
 Room Map[H][W];
 Point Hero = { .X = 0, .Y = 0 };
 bool HeroPosIsRightChar = false;
+bool IsHeroDied = false;
 Point Portal = { .X = 0, .Y = 0 };
 Diraction LastAxisDiraction = ZeroDiraction;
 AppState CurrentAppState = PrintInfo;
-unsigned int LvlCounter = 0;
+unsigned int LvlCounter = 1;
 ButtonValue Button = NoneButton;
 
 //--BOMB--
@@ -1108,12 +1109,12 @@ char *LcdText = NULL;
 int TextIndex = 0;
 int TextOffSet = 0;
 
-void InitLcdText()
+void InitLcdNextLvlText()
 {
   Lcd.clear();
 
-  char *depth = "DEPTH ";
-  char *goodluck = "\ngood luck...  ";
+  const char *depth = "DEPTH ";
+  const char *goodluck = "\ngood luck...  ";
   String *lvlCounterStr = new String(LvlCounter);
   char *temp = StringConcatenate(depth, lvlCounterStr->c_str());
   
@@ -1121,6 +1122,16 @@ void InitLcdText()
 
   delete lvlCounterStr;
   delete temp;
+}
+
+void InitLcdGameOverText()
+{
+  Lcd.clear();
+
+  const char *text = "Luck has turned\nits back on you";
+  const char *dots = "....";
+  
+  LcdText = StringConcatenate(text, dots);
 }
 
 bool DrawChar()
@@ -1224,17 +1235,10 @@ void HeroMoveWorkerClbk(bool eventExec)
   bool pastHeroPosIsRightChar = HeroPosIsRightChar;
 
   if (Hero.X == Portal.X && Hero.Y == Portal.Y)
-  {    
-    LvlCounter++;
-    Hero.X = 0;
-    Hero.Y = 0;
-
-    InitLcdText();
-    GameRenderWorker.SetOnlyEventInvoked(true);
-
-    CurrentAppState = PrintInfo;
+  {
+    SwichModeToPrintLcdText();
   }
-  else if (HeroMoveTo(LastAxisDiraction))
+  else if (!IsHeroDied && HeroMoveTo(LastAxisDiraction))
   {
     if (Bomb != NULL && Hero.X == Bomb->X && Hero.Y == Bomb->Y && HeroPosIsRightChar == BombIsRight)
     {
@@ -1267,10 +1271,20 @@ void BombExplosionWorkerClbk(bool eventExec)
     ExplosionPoints->Clear();
     ExplosionPoints = NULL;
     delete currentExplosionPoints;
+
+    if (IsHeroDied)
+    {
+      SwichModeToPrintLcdText();
+    }
   }
   else
   {
     BombExplosionWorkerCounter++;
+
+    if (!IsHeroDied && ((Hero.X == Bomb->X && Hero.Y == Bomb->Y) || LcdCheckExplosionPoint(Hero.X, Hero.Y)))
+    {
+      IsHeroDied = true;
+    }    
   }
 }
 TimeWorker BombExplosionWorker = TimeWorker(BombExplosionSpreadDelay, BombExplosionWorkerClbk, &BombExplosionWorkerFlag, false);
@@ -1320,6 +1334,17 @@ void GameLogicWorkerClbk(bool eventExec)
 TimeWorker GameLogicWorker = TimeWorker(InputDelay, GameLogicWorkerClbk);
 
 
+void SwichModeToPrintLcdText()
+{
+  if (IsHeroDied)
+    InitLcdGameOverText();
+  else
+    InitLcdNextLvlText();
+
+  GameRenderWorker.SetOnlyEventInvoked(true);
+
+  CurrentAppState = PrintInfo;
+}
 void LcdTextPrintWorkerClbk(bool eventExec)
 {
 #if PRINT_LVL_TEXT
@@ -1333,6 +1358,22 @@ void LcdTextPrintWorkerClbk(bool eventExec)
     delete ptr;
     TextIndex = 0;
     TextOffSet = 0;
+
+    if (!IsHeroDied)
+    {
+      LvlCounter++;
+    }
+    else
+    {
+      IsHeroDied = false;
+      LvlCounter = 1;
+      SwichModeToPrintLcdText();
+      return;
+    }
+
+    Hero.X = 0;
+    Hero.Y = 0;    
+    HeroPosIsRightChar = false;
 
     ClearMap();
     GenerateMap();
@@ -1376,8 +1417,7 @@ void setup()
     return;
   }
 
-  CurrentAppState = PrintInfo;
-  InitLcdText();
+  SwichModeToPrintLcdText();
 }
 
 void loop() 
