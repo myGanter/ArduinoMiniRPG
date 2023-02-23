@@ -1,7 +1,7 @@
-#define DEBUG_MOD true //set to true to duplicate the full status in the serial port
-#define PRINT_LVL_TEXT true
+#define DEBUG_MOD false //set to true to duplicate the full status in the serial port
+#define PRINT_LVL_TEXT false
 
-#define W 15
+#define W 11
 #define H 10
 #define LcdW 16
 #define LcdH 2 // if > 2 then refactor LcdDrawMap func
@@ -672,7 +672,7 @@ Diraction GetRoomDiractions(unsigned char x, unsigned char y)
   return res;
 }
 
-void InitPortalPoint()
+void InitOtherPoint()
 { 
   Portal.X = random(W);
   Portal.Y = random((Portal.X >= (W / 2) ? 0 : H / 2), H);
@@ -862,28 +862,54 @@ void MergeChars(byte target[], byte source[])
     target[i] |= source[i];
 }
 
-void CreateRoomLeftChar(byte target[], Diraction diraction)
+bool CreateRoomLeftChar(byte target[], Diraction diraction)
 {
+  bool noEmptyResult = false;
+
   if ((diraction & Top) == Top)
+  {
     MergeChars(target, TopWall);
+    noEmptyResult = true;
+  }
 
   if ((diraction & Bottom) == Bottom)
+  {
     MergeChars(target, BottomWall);
+    noEmptyResult = true;
+  }
 
   if ((diraction & Left) == Left)
+  {
     MergeChars(target, LeftWall);
+    noEmptyResult = true;
+  }
+
+  return noEmptyResult;
 }
 
-void CreateRoomRightChar(byte target[], Diraction diraction)
+bool CreateRoomRightChar(byte target[], Diraction diraction)
 {
+  bool noEmptyResult = false;
+
   if ((diraction & Top) == Top)
+  {
     MergeChars(target, TopWall);
+    noEmptyResult = true;
+  }
 
   if ((diraction & Bottom) == Bottom)
+  {
     MergeChars(target, BottomWall);
+    noEmptyResult = true;
+  }
 
   if ((diraction & RightDiraction) == RightDiraction)
+  {
     MergeChars(target, RightWall);
+    noEmptyResult = true;
+  }
+
+  return noEmptyResult;
 }
 
 bool EqualChars(byte char1[], byte char2[])
@@ -905,33 +931,28 @@ byte FindIndexChar(byte chars[][8], byte char1[], byte maxChars)
 void LcdCacheCreateChar(unsigned char x, unsigned char y, byte lcdIndexes[], byte chars[][8], uint8_t lcdX, byte *maxCharIndex, Diraction charExist)
 {
   Diraction currentPos = GetRoomDiractions(x, y);
-  
-  CreateRoomLeftChar(chars[*maxCharIndex], currentPos);
-  byte findIndex = FindIndexChar(chars, chars[*maxCharIndex], *maxCharIndex);
-  if (findIndex == 255)
+  if (currentPos == ZeroDiraction)
   {
-    findIndex = *maxCharIndex;
-    (*maxCharIndex)++;
-  }
-  else
-  {
-    ClearArr<byte>(chars[*maxCharIndex], 8, 0);
+    byte spaceChar = (byte)' ';
+
+    if ((charExist & Left) != Left)
+      lcdIndexes[lcdX * 2] = spaceChar;
+
+    if ((charExist & RightDiraction) != RightDiraction)
+      lcdIndexes[lcdX * 2 + 1] = spaceChar;
+
+    return;
   }
 
-  if ((charExist & Left) != Left)
+  byte findIndex = 0;
+  if (!CreateRoomLeftChar(chars[*maxCharIndex], currentPos))
   {
-    lcdIndexes[lcdX * 2] = findIndex;
-  }
-  
-  CreateRoomRightChar(chars[*maxCharIndex], currentPos);
-  if (EqualChars(chars[*maxCharIndex], chars[findIndex]))
-  {
-    ClearArr<byte>(chars[*maxCharIndex], 8, 0);
+    if ((charExist & Left) != Left)
+      lcdIndexes[lcdX * 2] = (byte)' ';
   }
   else
   {
     findIndex = FindIndexChar(chars, chars[*maxCharIndex], *maxCharIndex);
-
     if (findIndex == 255)
     {
       findIndex = *maxCharIndex;
@@ -940,31 +961,77 @@ void LcdCacheCreateChar(unsigned char x, unsigned char y, byte lcdIndexes[], byt
     else
     {
       ClearArr<byte>(chars[*maxCharIndex], 8, 0);
-    }    
-  } 
+    }
 
-  if ((charExist & RightDiraction) != RightDiraction)
+    if ((charExist & Left) != Left)
+    {
+      lcdIndexes[lcdX * 2] = findIndex;
+    }
+  }  
+  
+  if (!CreateRoomRightChar(chars[*maxCharIndex], currentPos))
   {
-    lcdIndexes[lcdX * 2 + 1] = findIndex;
+    if ((charExist & RightDiraction) != RightDiraction)
+      lcdIndexes[lcdX * 2 + 1] = (byte)' ';
   }
+  else
+  {
+    if (EqualChars(chars[*maxCharIndex], chars[findIndex]))
+    {
+      ClearArr<byte>(chars[*maxCharIndex], 8, 0);
+    }
+    else
+    {
+      findIndex = FindIndexChar(chars, chars[*maxCharIndex], *maxCharIndex);
+
+      if (findIndex == 255)
+      {
+        findIndex = *maxCharIndex;
+        (*maxCharIndex)++;
+      }
+      else
+      {
+        ClearArr<byte>(chars[*maxCharIndex], 8, 0);
+      }    
+    } 
+
+    if ((charExist & RightDiraction) != RightDiraction)
+    {
+      lcdIndexes[lcdX * 2 + 1] = findIndex;
+    }
+  }  
 }
 
 void ReconfigureFirstHeroChar(byte lcdIndexes[], byte chars[][8], uint8_t lcdX, byte *maxCharIndex)
 {
+  byte spaceChar = (byte)' ';
   int lcdIndex = lcdX * 2;
   bool rightFree = lcdIndexes[lcdIndex + 1] < 8;
-  bool allFree = lcdIndexes[lcdIndex] < 8 && rightFree;
+  bool heroFree = lcdIndexes[lcdIndex + (int)HeroPosIsRightChar] < 8 || lcdIndexes[lcdIndex + (int)HeroPosIsRightChar] == spaceChar;
 
-  if ((*maxCharIndex) < 2)
+  if ((*maxCharIndex) < 1)
   {
     (*maxCharIndex)++;
-    MergeChars(chars[1], chars[0]);
 
-    if (rightFree)
-      lcdIndexes[lcdIndex + 1] = 1;
+    if (heroFree)
+      lcdIndexes[lcdIndex + (int)HeroPosIsRightChar] = 0;
+
+    MergeChars(chars[0], HeroAnimation.Current());
+
+    return;
   }
+  else if ((*maxCharIndex) < 2)
+  {
+    (*maxCharIndex)++;
 
-  MergeChars(chars[(allFree || (*maxCharIndex) == 2 ? (int)HeroPosIsRightChar : 0)], HeroAnimation.Current());
+    if (lcdIndexes[lcdIndex + 1] != spaceChar)
+      MergeChars(chars[1], chars[0]);
+
+    if (rightFree || lcdIndexes[lcdIndex + 1] == spaceChar)
+      lcdIndexes[lcdIndex + 1] = 1;    
+  }  
+
+  MergeChars(chars[(int)HeroPosIsRightChar], HeroAnimation.Current());
 }
 
 bool LcdCheckExplosionPoint(unsigned char x, unsigned char y)
@@ -1049,7 +1116,9 @@ void LcdDrawMap(unsigned char x, unsigned char y)
     ClearArr<byte>(chars[i], 8, 0);
 
   if (!LcdCacheCreateCharCheckExistingGameObjsOrDefault(x, y, lcdIndexes, chars, &maxCharIndex))
+  {
     ReconfigureFirstHeroChar(lcdIndexes, chars, lcdX, &maxCharIndex);
+  }
 
   unsigned char newX = x;
   while (CheckLeftRoomAvailable(newX--, y) && (newX % LcdRenderW) < lcdX)
@@ -1377,7 +1446,7 @@ void LcdTextPrintWorkerClbk(bool eventExec)
 
     ClearMap();
     GenerateMap();
-    InitPortalPoint();
+    InitOtherPoint();
     GameRenderWorker.SetOnlyEventInvoked(false);
 
     CurrentAppState = GameLoop;
