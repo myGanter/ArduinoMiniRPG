@@ -1,5 +1,5 @@
-#define DEBUG_MOD false //set to true to duplicate the full status in the serial port
-#define PRINT_LVL_TEXT false
+#define DEBUG_MOD true //set to true to duplicate the full status in the serial port
+#define PRINT_LVL_TEXT true
 
 #define W 11
 #define H 10
@@ -10,9 +10,12 @@
 #define AxisThreshold 30 // % 
 #define MinMaxAxisValues 14000 // max for GY-521 ~ 20000
 #define StartMinMaxAxisValues 10000
+#define StartLvl 5
+#define StartSpawnLvlEnemy 1
 
 #define InputDelay 10
 #define HeroMoveDelay 300
+#define EnemyMoveDelay 3000
 #define LcdTextPrintDelay 300
 #define GameRenderDelay 200 //5 fps
 #define GlobalAnimationDelay 500
@@ -25,6 +28,28 @@
 #define PortalRightChars ")}"
 #define BombChars "@ "
 #define ExplosionChars "-+*O*O*O*O*O*O"
+
+#define EnemyAnimationsCount 3
+//■■■■■
+//■ ■ ■
+//■■■■■
+//■   ■
+//■   ■
+#define Enemy1Chars new char[1] { (char)252 }
+// ■■■ 
+//■   ■
+//■   ■
+// ■ ■ 
+//■■ ■■
+#define Enemy2Chars new char[1] { (char)244 }
+// ■ ■    ■■■ 
+//       ■   ■
+// ■■■   ■   ■
+//■   ■  ■   ■
+//■   ■  ■   ■
+//■   ■  ■   ■
+// ■■■    ■■■ 
+#define Enemy3Chars new char[2] { (char)239, (char)79 }
 
 #include "I2Cdev.h"
 #include "MPU6050.h"
@@ -77,6 +102,14 @@ struct PointDiraction
 {
   Point P;
   Diraction Diraction;
+};
+
+struct Enemy
+{
+  Point Position;
+  bool PosIsRightChar;
+  byte AnimationContainerIndex;
+  Diraction LastDiraction;
 };
 //-------------------- end declare types
 
@@ -244,6 +277,11 @@ template<typename T> class NodeIterator
       return _currentNode->Value;
     }
 
+    T* GetReferenceValue()
+    {
+      return &_currentNode->Value;
+    }
+
     void SetValue(T value)
     {
       _currentNode->Value = value;
@@ -323,6 +361,38 @@ template<typename T> class Stack
       }
 
       return false;
+    }
+
+    void Delete(T val)
+    {
+      if (_count == 0)
+        return;
+
+      Node<T>* node = _currentNode;
+
+      if (memcmp(&node->Value, &val, sizeof(T)) == 0)
+      {
+        _currentNode = node->NextNode;
+
+        delete node;
+        _count--;
+        return;
+      }
+      
+      while (node->NextNode != NULL)
+      {
+        if (memcmp(&node->NextNode->Value, &val, sizeof(T)) == 0)
+        {
+          Node<T>* delNode = node->NextNode;
+          node->NextNode = delNode->NextNode;
+
+          delete delNode;
+          _count--;
+          return;
+        }
+
+        node = node->NextNode;
+      }
     }
 
     unsigned int Count()
@@ -428,10 +498,11 @@ Room Map[H][W];
 Point Hero = { .X = 0, .Y = 0 };
 bool HeroPosIsRightChar = false;
 bool IsHeroDied = false;
+Stack<Enemy> Enemies = Stack<Enemy>();
 Point Portal = { .X = 0, .Y = 0 };
 Diraction LastAxisDiraction = ZeroDiraction;
 AppState CurrentAppState = PrintInfo;
-unsigned int LvlCounter = 1;
+unsigned int LvlCounter = StartLvl;
 ButtonValue Button = NoneButton;
 
 //--BOMB--
@@ -578,6 +649,18 @@ void DrawMap()
         Serial.print("()");
         offset = "";
       }
+      else if (Enemies.Count() > 0)
+      {
+        Enemy *enemy = GetEnemyFromPoint(x, y);
+        if (enemy != NULL)
+        {
+          if (enemy->PosIsRightChar)
+            Serial.print(" ?");
+          else
+            Serial.print("? ");
+          offset = "";
+        }
+      }
 
       Serial.print(offset);
 
@@ -672,58 +755,94 @@ Diraction GetRoomDiractions(unsigned char x, unsigned char y)
   return res;
 }
 
+Point GenerateRandomPoint()
+{
+  Point res;
+
+  res.X = random(W);
+  res.Y = random((res.X >= (W / 2) ? 0 : H / 2), H);
+
+  return res;
+}
+
+void IninEnamies()
+{
+  Enemies.Clear();
+  int maxEnemy = sqrt(W * H) / 2;
+  int enemyCount = LvlCounter - StartSpawnLvlEnemy;
+  if (enemyCount > 0)
+  {
+    if (enemyCount > maxEnemy)
+      enemyCount = maxEnemy;
+
+    for (int i = 0; i < enemyCount; ++i)
+    {
+      Enemy enemy = 
+      { 
+        .Position = GenerateRandomPoint(), 
+        .PosIsRightChar = false, 
+        .AnimationContainerIndex = random(EnemyAnimationsCount), 
+        .LastDiraction = ZeroDiraction 
+      };
+
+      Enemies.Push(enemy);
+    }
+  }
+}
+
 void InitOtherPoint()
 { 
-  Portal.X = random(W);
-  Portal.Y = random((Portal.X >= (W / 2) ? 0 : H / 2), H);
+  Portal = GenerateRandomPoint();
+
+  IninEnamies();
 }
 //-------------------- end map
 
 
 //-------------------- hero
-bool HeroMoveTo(Diraction diraction)
+bool PointMoveTo(Diraction diraction, Point *point, bool *pointPosIsRightChar)
 {
   if (diraction == Top)
   {
-    if ((Hero.Y - 1) > -1 && RoomIsDown(Map[Hero.Y - 1][Hero.X]))
+    if ((point->Y - 1) > -1 && RoomIsDown(Map[point->Y - 1][point->X]))
     {
-      Hero.Y -= 1;
+      point->Y -= 1;
       return true;
     }  
   }
   else if (diraction == RightDiraction)
   {
-    if (!HeroPosIsRightChar)
+    if (!(*pointPosIsRightChar))
     {
-      HeroPosIsRightChar = true;
+      (*pointPosIsRightChar) = true;
       return true;
     }
-    else if ((Hero.X + 1) < W && RoomIsRight(Map[Hero.Y][Hero.X]))
+    else if ((point->X + 1) < W && RoomIsRight(Map[point->Y][point->X]))
     {
-      Hero.X += 1;
-      HeroPosIsRightChar = false;
+      point->X += 1;
+      (*pointPosIsRightChar) = false;
       return true;
     }
   }
   else if (diraction == Bottom)
   {
-    if ((Hero.Y + 1) < H && RoomIsDown(Map[Hero.Y][Hero.X]))
+    if ((point->Y + 1) < H && RoomIsDown(Map[point->Y][point->X]))
     {
-      Hero.Y += 1;
+      point->Y += 1;
       return true;
     }
   }
   else if (diraction == Left)
   {
-    if (HeroPosIsRightChar)
+    if ((*pointPosIsRightChar))
     {
-      HeroPosIsRightChar = false;
+      (*pointPosIsRightChar) = false;
       return true;
     }
-    else if ((Hero.X - 1) > -1 && RoomIsRight(Map[Hero.Y][Hero.X - 1]))
+    else if ((point->X - 1) > -1 && RoomIsRight(Map[point->Y][point->X - 1]))
     {
-      Hero.X -= 1;
-      HeroPosIsRightChar = true;
+      point->X -= 1;
+      (*pointPosIsRightChar) = true;
       return true;
     }
   }
@@ -764,6 +883,254 @@ bool ExplosionPropagation()
   }
 
   return propagate;
+}
+
+Diraction GetXDiractionFromInt(int value)
+{
+  if (value < 0)
+    return Left;
+  else if (value > 0)
+    return RightDiraction;
+  else
+    return ZeroDiraction;
+}
+
+Diraction GetYDiractionFromInt(int value)
+{
+  if (value < 0)
+    return Top;
+  else if (value > 0)
+    return Bottom;
+  else
+    return ZeroDiraction;
+}
+
+/*void EnemyAIAlg1(Enemy *enemy)
+{
+  Point pastPoint = enemy->Position;
+  bool pastRightPos = enemy->PosIsRightChar;
+
+  int dx = (int)Hero.X - enemy->Position.X;
+  int dy = (int)Hero.Y - enemy->Position.Y;
+  
+  if (dx == 0 && dy == 0)
+  {
+    enemy->PosIsRightChar = HeroPosIsRightChar;
+    return;
+  }
+
+  if (abs(dx) > abs(dy))
+  {
+    Diraction xDiraction = GetXDiractionFromInt(dx);
+
+    if (!PointMoveTo(xDiraction, &enemy->Position, &enemy->PosIsRightChar))
+    {       
+      Diraction yDiraction = GetYDiractionFromInt(dy);
+
+      if (!PointMoveTo(yDiraction, &enemy->Position, &enemy->PosIsRightChar))
+      {
+        if (!PointMoveTo(yDiraction == Top ? Bottom : Top, &enemy->Position, &enemy->PosIsRightChar))
+        {
+          PointMoveTo(xDiraction == RightDiraction ? Left : RightDiraction, &enemy->Position, &enemy->PosIsRightChar);
+        }
+      }
+    }
+  }
+  else
+  {
+    Diraction yDiraction = GetYDiractionFromInt(dy);
+
+    if (!PointMoveTo(yDiraction, &enemy->Position, &enemy->PosIsRightChar))
+    {
+      Diraction xDiraction = GetXDiractionFromInt(dx);
+
+      if (!PointMoveTo(xDiraction, &enemy->Position, &enemy->PosIsRightChar))
+      {
+        if (!PointMoveTo(yDiraction == Top ? Bottom : Top, &enemy->Position, &enemy->PosIsRightChar))
+        {
+          PointMoveTo(xDiraction == RightDiraction ? Left : RightDiraction, &enemy->Position, &enemy->PosIsRightChar);
+        }
+      }
+    }
+  }
+
+  if (GetCountEnemiesFromPoint(enemy->Position.X, enemy->Position.Y) > 1)
+  {
+    enemy->Position = pastPoint;
+    enemy->PosIsRightChar = pastRightPos;
+  }
+}*/
+
+void EnemyAIAlg2(Enemy *enemy)
+{
+  Point pastPoint = enemy->Position;
+  bool pastRightPos = enemy->PosIsRightChar;
+  int countEnemiesFromPoint = 0;
+
+  if (Hero.X == pastPoint.X && Hero.Y == pastPoint.Y)
+  {
+    enemy->PosIsRightChar = HeroPosIsRightChar;
+    return;
+  }
+
+  Point visionZoneLine = enemy->Position;
+  if (enemy->Position.X == Hero.X)
+  {
+    while (CheckTopRoomAvailable(visionZoneLine.X, visionZoneLine.Y))
+    {
+      visionZoneLine.Y--;
+
+      if (Hero.Y == visionZoneLine.Y)
+      {
+        enemy->LastDiraction = Top;
+        break;
+      }
+    }
+    
+    visionZoneLine = enemy->Position;
+    while (CheckBottomRoomAvailable(visionZoneLine.X, visionZoneLine.Y))
+    {
+      visionZoneLine.Y++;
+
+      if (Hero.Y == visionZoneLine.Y)
+      {
+        enemy->LastDiraction = Bottom;
+        break;
+      }
+    }
+  }
+
+  if (enemy->Position.Y == Hero.Y)
+  {
+    while (CheckLeftRoomAvailable(visionZoneLine.X, visionZoneLine.Y))
+    {
+      visionZoneLine.X--;
+
+      if (Hero.X == visionZoneLine.X)
+      {
+        enemy->LastDiraction = Left;
+        break;
+      }
+    }
+    
+    visionZoneLine = enemy->Position;
+    while (CheckRightRoomAvailable(visionZoneLine.X, visionZoneLine.Y))
+    {
+      visionZoneLine.X++;
+
+      if (Hero.X == visionZoneLine.X)
+      {
+        enemy->LastDiraction = RightDiraction;
+        break;
+      }
+    }
+  }
+
+  if (!PointMoveTo(enemy->LastDiraction, &enemy->Position, &enemy->PosIsRightChar) || 
+    (countEnemiesFromPoint = GetCountEnemiesFromPoint(enemy->Position.X, enemy->Position.Y)) > 1)
+  {
+    if (countEnemiesFromPoint > 1)
+    {
+      enemy->Position = pastPoint;
+      enemy->PosIsRightChar = pastRightPos;
+    }
+
+    Diraction diractions[4] = { ZeroDiraction, ZeroDiraction, ZeroDiraction, ZeroDiraction };
+    int diractionsIndexes = 0;
+
+    if (enemy->LastDiraction != Top && CheckTopRoomAvailable(enemy->Position.X, enemy->Position.Y))
+    {
+      diractions[diractionsIndexes++] = Top;
+    }
+    
+    if (enemy->LastDiraction != RightDiraction && CheckRightRoomAvailable(enemy->Position.X, enemy->Position.Y))
+    {
+      diractions[diractionsIndexes++] = RightDiraction;
+    }
+
+    if (enemy->LastDiraction != Bottom && CheckBottomRoomAvailable(enemy->Position.X, enemy->Position.Y))
+    {
+      diractions[diractionsIndexes++] = Bottom;
+    }
+
+    if (enemy->LastDiraction != Left && CheckLeftRoomAvailable(enemy->Position.X, enemy->Position.Y))
+    {
+      diractions[diractionsIndexes++] = Left;
+    }
+
+    if (diractionsIndexes > 1)
+    {
+      Diraction searchDiraction = ZeroDiraction;
+      
+      if (enemy->LastDiraction == Top)
+        searchDiraction = Bottom;
+      else if (enemy->LastDiraction == Bottom)
+        searchDiraction = Top;
+      else if (enemy->LastDiraction == Left)
+        searchDiraction = RightDiraction;
+      else if (enemy->LastDiraction == RightDiraction)
+        searchDiraction = Left;
+
+      for (int i = 0; i < diractionsIndexes; ++i)
+      {
+        if (diractions[i] == searchDiraction)
+        {
+          int replaseIndex = (i + 1) % diractionsIndexes;
+          diractions[i] = diractions[replaseIndex];
+
+          break;
+        }
+      }
+    }
+
+    enemy->LastDiraction = diractions[random(diractionsIndexes)];
+  }
+  else
+  {
+    Diraction diractions[2] = { ZeroDiraction, ZeroDiraction };
+    int diractionsIndexes = 0;
+
+    if ((enemy->LastDiraction == Left || enemy->LastDiraction == RightDiraction) && random(100) > 60)
+    {
+      if (CheckTopRoomAvailable(enemy->Position.X, enemy->Position.Y))
+      {
+        diractions[diractionsIndexes++] = Top;
+      }
+
+      if (CheckBottomRoomAvailable(enemy->Position.X, enemy->Position.Y))
+      {
+        diractions[diractionsIndexes++] = Bottom;
+      }
+    }
+    else if ((enemy->LastDiraction == Top || enemy->LastDiraction == Bottom) && random(100) > 60)
+    {
+      if (CheckRightRoomAvailable(enemy->Position.X, enemy->Position.Y))
+      {
+        diractions[diractionsIndexes++] = RightDiraction;
+      }
+
+      if (CheckLeftRoomAvailable(enemy->Position.X, enemy->Position.Y))
+      {
+        diractions[diractionsIndexes++] = Left;
+      }
+    }
+
+    if (diractionsIndexes > 0)
+      enemy->LastDiraction = diractions[random(diractionsIndexes)];
+  }
+}
+
+void CheckHeroDie()
+{
+  if (Enemies.Count() > 0)
+  {
+    Enemy *enemy = GetEnemyFromPoint(Hero.X, Hero.Y);
+
+    if (enemy != NULL && enemy->PosIsRightChar == HeroPosIsRightChar)
+    {
+      IsHeroDied = true;
+    }
+  }
 }
 //-------------------- end hero
 
@@ -846,6 +1213,12 @@ AnimationContainer<char> PortalLeftAnimation = AnimationContainer<char>(PortalLe
 AnimationContainer<char> PortalRightAnimation = AnimationContainer<char>(PortalRightChars, 2, sizeof(char), GlobalAnimationDelay);
 AnimationContainer<char> BombAnimation = AnimationContainer<char>(BombChars, 2, sizeof(char), GlobalAnimationDelay / 2);
 AnimationContainer<char> ExplosionAnimation = AnimationContainer<char>(ExplosionChars, 14, sizeof(char), BombExplosionSpreadDelay);
+AnimationContainer<char> EnemyAnimations[EnemyAnimationsCount] = 
+{
+  AnimationContainer<char>(Enemy1Chars, 1, sizeof(char), GlobalAnimationDelay),
+  AnimationContainer<char>(Enemy2Chars, 1, sizeof(char), GlobalAnimationDelay),
+  AnimationContainer<char>(Enemy3Chars, 2, sizeof(char), GlobalAnimationDelay)
+};
 
 void InitLcd()
 {
@@ -1053,6 +1426,44 @@ bool LcdCheckExplosionPoint(unsigned char x, unsigned char y)
   return false;
 }
 
+int GetCountEnemiesFromPoint(unsigned char x, unsigned char y)
+{
+  int result = 0;
+  NodeIterator<Enemy> *iterator = Enemies.CreateIterator();
+
+  do
+  {
+    Enemy *enemy = iterator->GetReferenceValue();
+    if (enemy->Position.X == x && enemy->Position.Y == y)
+    {
+      result++;
+    }
+  } 
+  while (iterator->MoveNext());
+
+  delete iterator;
+  return result;
+}
+
+Enemy* GetEnemyFromPoint(unsigned char x, unsigned char y)
+{
+  NodeIterator<Enemy> *iterator = Enemies.CreateIterator();
+
+  do
+  {
+    Enemy *enemy = iterator->GetReferenceValue();
+    if (enemy->Position.X == x && enemy->Position.Y == y)
+    {
+      delete iterator;
+      return enemy;
+    }
+  } 
+  while (iterator->MoveNext());
+
+  delete iterator;
+  return NULL;
+}
+
 Diraction LcdCacheCreateCharCheckExistingGameObjs(unsigned char x, unsigned char y, byte lcdIndexes[], int leftIndex, int rightIndex)
 {
   byte bombChar = (byte)*BombAnimation.Current();
@@ -1084,6 +1495,18 @@ Diraction LcdCacheCreateCharCheckExistingGameObjs(unsigned char x, unsigned char
 
     lcdIndexes[leftIndex] = explosionChar;
     lcdIndexes[rightIndex] = explosionChar;
+  }
+  else if (Enemies.Count() > 0)
+  {
+    Enemy *enemy = GetEnemyFromPoint(x, y);
+
+    if (enemy == NULL)
+      return ZeroDiraction;
+
+    byte enemyChar = (byte)*EnemyAnimations[enemy->AnimationContainerIndex].Current();
+    lcdIndexes[enemy->PosIsRightChar ? rightIndex : leftIndex] = enemyChar;
+
+    return enemy->PosIsRightChar ? RightDiraction : Left;
   }
   else
   {
@@ -1307,7 +1730,11 @@ void HeroMoveWorkerClbk(bool eventExec)
   {
     SwichModeToPrintLcdText();
   }
-  else if (!IsHeroDied && HeroMoveTo(LastAxisDiraction))
+  else if (IsHeroDied)
+  {    
+    SwichModeToPrintLcdText();
+  }
+  else if (!IsHeroDied && PointMoveTo(LastAxisDiraction, &Hero, &HeroPosIsRightChar))
   {
     if (Bomb != NULL && Hero.X == Bomb->X && Hero.Y == Bomb->Y && HeroPosIsRightChar == BombIsRight)
     {
@@ -1317,6 +1744,8 @@ void HeroMoveWorkerClbk(bool eventExec)
     else
     {
       InvokeGameRenderWorkerFlag = true;
+
+      CheckHeroDie();
     }
   }
 }
@@ -1353,7 +1782,25 @@ void BombExplosionWorkerClbk(bool eventExec)
     if (!IsHeroDied && ((Hero.X == Bomb->X && Hero.Y == Bomb->Y) || LcdCheckExplosionPoint(Hero.X, Hero.Y)))
     {
       IsHeroDied = true;
-    }    
+    }
+
+    if (Enemies.Count() > 0)
+    {
+      NodeIterator<Enemy> *enemiesIterator = Enemies.CreateIterator();
+
+      do
+      {
+        Enemy *enemy = enemiesIterator->GetReferenceValue();
+        if (LcdCheckExplosionPoint(enemy->Position.X, enemy->Position.Y) || (enemy->Position.X == Bomb->X && enemy->Position.Y == Bomb->Y))
+        {
+          Enemies.Delete(*enemy);
+          break;
+        }
+      } 
+      while (enemiesIterator->MoveNext());
+
+      delete enemiesIterator;
+    }
   }
 }
 TimeWorker BombExplosionWorker = TimeWorker(BombExplosionSpreadDelay, BombExplosionWorkerClbk, &BombExplosionWorkerFlag, false);
@@ -1380,9 +1827,33 @@ void HeroBombWorkerClbk(bool eventExec)
 TimeWorker HeroBombWorker = TimeWorker(BombExplosionDelay, HeroBombWorkerClbk, &InvokeHeroBombWorkerFlag, false);
 
 
+void EnemyMoveWorkerClbk(bool eventExec)
+{
+  //InvokeGameRenderWorkerFlag = true;
+
+  if (Enemies.Count() == 0)
+    return;
+
+  NodeIterator<Enemy> *enemiesIterator = Enemies.CreateIterator();
+  do
+  {
+    Enemy *enemy = enemiesIterator->GetReferenceValue();    
+
+    EnemyAIAlg2(enemy);    
+  } 
+  while (enemiesIterator->MoveNext());
+
+  delete enemiesIterator;
+
+  CheckHeroDie();
+}
+TimeWorker EnemyMoveWorker = TimeWorker(EnemyMoveDelay, EnemyMoveWorkerClbk);
+
+
 void GameLogicWorkerClbk(bool eventExec)
 { 
   HeroMoveWorker.Update();
+  EnemyMoveWorker.Update();
 
   if (Button == SelectButton && Bomb == NULL)
   {
@@ -1462,6 +1933,9 @@ void GlobalAnimationWorkerClbk(bool eventExec)
   HeroAnimation.IncrementIndex();
   BombAnimation.IncrementIndex();
   ExplosionAnimation.IncrementIndex();
+  
+  for (int i = 0; i < EnemyAnimationsCount; ++i)
+    EnemyAnimations[i].IncrementIndex();
 }
 TimeWorker GlobalAnimationWorker = TimeWorker(GameRenderDelay, GlobalAnimationWorkerClbk);
 //-------------------- end workers
