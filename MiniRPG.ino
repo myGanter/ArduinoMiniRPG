@@ -3,9 +3,10 @@
 
 #define W 11
 #define H 10
-#define LcdW 16
+#define LcdW 20
 #define LcdH 2 // if > 2 then refactor LcdDrawMap func
-#define LcdRenderW 8 // LcdW / 2
+#define LcdRenderW 10 // LcdW / 2
+#define LcdRenderH 2
 #define ActivateRoomValue 1
 #define AxisThreshold 30 // % 
 #define MinMaxAxisValues 14000 // max for GY-521 ~ 20000
@@ -796,6 +797,22 @@ void InitOtherPoint()
 
   IninEnamies();
 }
+
+void ClearBomb()
+{
+  if (Bomb == NULL)
+    return;
+
+  BombIsExplosion = false;
+
+  Point *currentBomb = Bomb;
+  Bomb = NULL;
+  delete currentBomb;
+  Stack<Point> *currentExplosionPoints = ExplosionPoints;
+  ExplosionPoints->Clear();
+  ExplosionPoints = NULL;
+  delete currentExplosionPoints;
+}
 //-------------------- end map
 
 
@@ -1303,7 +1320,7 @@ byte FindIndexChar(byte chars[][8], byte char1[], byte maxChars)
 
 void LcdCacheCreateChar(unsigned char x, unsigned char y, byte lcdIndexes[], byte chars[][8], uint8_t lcdX, byte *maxCharIndex, Diraction charExist)
 {
-  Diraction currentPos = GetRoomDiractions(x, y);
+  Diraction currentPos = GetRoomDiractions(x, y); 
   if (currentPos == ZeroDiraction)
   {
     byte spaceChar = (byte)' ';
@@ -1348,8 +1365,8 @@ void LcdCacheCreateChar(unsigned char x, unsigned char y, byte lcdIndexes[], byt
       lcdIndexes[lcdX * 2 + 1] = (byte)' ';
   }
   else
-  {
-    if (EqualChars(chars[*maxCharIndex], chars[findIndex]))
+  {   
+    if ((*maxCharIndex) > 0 && EqualChars(chars[*maxCharIndex], chars[findIndex]))
     {
       ClearArr<byte>(chars[*maxCharIndex], 8, 0);
     }
@@ -1381,6 +1398,8 @@ void ReconfigureFirstHeroChar(byte lcdIndexes[], byte chars[][8], uint8_t lcdX, 
   int lcdIndex = lcdX * 2;
   bool rightFree = lcdIndexes[lcdIndex + 1] < 8;
   bool heroFree = lcdIndexes[lcdIndex + (int)HeroPosIsRightChar] < 8 || lcdIndexes[lcdIndex + (int)HeroPosIsRightChar] == spaceChar;
+  bool leftSpace = lcdIndexes[lcdIndex] == spaceChar;
+  bool rightSpace = lcdIndexes[lcdIndex + 1] == spaceChar;
 
   if ((*maxCharIndex) < 1)
   {
@@ -1390,21 +1409,38 @@ void ReconfigureFirstHeroChar(byte lcdIndexes[], byte chars[][8], uint8_t lcdX, 
       lcdIndexes[lcdIndex + (int)HeroPosIsRightChar] = 0;
 
     MergeChars(chars[0], HeroAnimation.Current());
-
-    return;
   }
   else if ((*maxCharIndex) < 2)
   {
-    (*maxCharIndex)++;
-
-    if (lcdIndexes[lcdIndex + 1] != spaceChar)
+    if (leftSpace || rightSpace)
+    {
+      if ((!HeroPosIsRightChar && rightSpace) || (HeroPosIsRightChar && leftSpace))
+      {
+        MergeChars(chars[0], HeroAnimation.Current());
+      }
+      else
+      {
+        (*maxCharIndex)++;
+        MergeChars(chars[1], HeroAnimation.Current());
+        lcdIndexes[lcdIndex + (int)HeroPosIsRightChar] = 1;
+      }
+    }
+    else
+    {
+      (*maxCharIndex)++;
+    
       MergeChars(chars[1], chars[0]);
 
-    if (rightFree || lcdIndexes[lcdIndex + 1] == spaceChar)
-      lcdIndexes[lcdIndex + 1] = 1;    
-  }  
+      if (rightFree)
+        lcdIndexes[lcdIndex + 1] = 1;
 
-  MergeChars(chars[(int)HeroPosIsRightChar], HeroAnimation.Current());
+      MergeChars(chars[(int)HeroPosIsRightChar], HeroAnimation.Current());
+    }
+  }
+  else
+  {
+    MergeChars(chars[(int)HeroPosIsRightChar], HeroAnimation.Current());
+  }
 }
 
 bool LcdCheckExplosionPoint(unsigned char x, unsigned char y)
@@ -1527,7 +1563,7 @@ bool LcdCacheCreateCharCheckExistingGameObjsOrDefault(unsigned char x, unsigned 
 
 void LcdDrawMap(unsigned char x, unsigned char y)
 {
-  uint8_t lcdY = y % LcdH;
+  uint8_t lcdY = y % LcdRenderH;
   uint8_t lcdX = x % LcdRenderW;
 
   byte lcdIndexes[LcdW];
@@ -1693,19 +1729,17 @@ void InputWorkerClbk(bool eventExec)
   if (LastAxisDiraction != ZeroDiraction)
     InvokeHeroMoveWorkerFlag = true;
 
-  int buttonValue = analogRead(0);
-  if (buttonValue < 100) 
-    Button = TopButton;
-  else if (buttonValue < 200) 
-    Button = TopButton;
-  else if (buttonValue < 400)
-    Button = BottomButton;
-  else if (buttonValue < 600)
-    Button = LeftButton;
-  else if (buttonValue < 800)
-    Button = SelectButton;
+  int buttonValue = analogRead(1);
+  if (buttonValue > 900)
+    Button = SelectButton;    
   else
     Button = NoneButton;
+  
+  //todo
+  //Button = TopButton;
+  //Button = RightButton;
+  //Button = BottomButton;
+  //Button = LeftButton;
 }
 TimeWorker InputWorker = TimeWorker(InputDelay, InputWorkerClbk);
 
@@ -1759,16 +1793,7 @@ void BombExplosionWorkerClbk(bool eventExec)
 
   if (!ExplosionPropagation() && (BombExplosionSpreadDelay * BombExplosionWorkerCounter) >= MinimumBombExplosionActionTime)
   {
-    BombIsExplosion = false;
-
-    Point *currentBomb = Bomb;
-    Bomb = NULL;
-    delete currentBomb;
-
-    Stack<Point> *currentExplosionPoints = ExplosionPoints;
-    ExplosionPoints->Clear();
-    ExplosionPoints = NULL;
-    delete currentExplosionPoints;
+    ClearBomb();
 
     if (IsHeroDied)
     {
@@ -1916,6 +1941,7 @@ void LcdTextPrintWorkerClbk(bool eventExec)
     HeroPosIsRightChar = false;
 
     ClearMap();
+    ClearBomb();
     GenerateMap();
     InitOtherPoint();
     GameRenderWorker.SetOnlyEventInvoked(false);
