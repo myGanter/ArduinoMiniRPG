@@ -1,10 +1,10 @@
-#define DEBUG_MOD true //set to true to duplicate the full status in the serial port
+#define DEBUG_MOD false //set to true to duplicate the full status in the serial port
 #define PRINT_LVL_TEXT true
 
 #define W 11
 #define H 10
 #define LcdW 20
-#define LcdH 2 // if > 2 then refactor LcdDrawMap func
+#define LcdH 4 // if > 2 then refactor LcdDrawMap func
 #define LcdRenderW 10 // LcdW / 2
 #define LcdRenderH 2
 #define ActivateRoomValue 1
@@ -126,7 +126,7 @@ void ClearArr(T arr[], int count, T defaultVal)
 char* StringConcatenate(const char *first, const char *second) 
 {
     int l1 = 0, l2 = 0;
-    const char * f = first, * l = second;
+    const char *f = first, *l = second;
 
     while (*f++) ++l1;
     while (*l++) ++l2;
@@ -138,6 +138,16 @@ char* StringConcatenate(const char *first, const char *second)
 
     result[l1 + l2] = '\0';
     return result;
+}
+
+int GetStrLen(const char *str)
+{
+  int res = 0;
+  const char *f = str;
+
+  while (*f++) ++res;
+
+  return res;
 }
 //-------------------- end common
 
@@ -505,6 +515,7 @@ Diraction LastAxisDiraction = ZeroDiraction;
 AppState CurrentAppState = PrintInfo;
 unsigned int LvlCounter = StartLvl;
 ButtonValue Button = NoneButton;
+int LastEnemiesUiStringLen = -1;
 
 //--BOMB--
 Point *Bomb = NULL;
@@ -1239,7 +1250,7 @@ AnimationContainer<char> EnemyAnimations[EnemyAnimationsCount] =
 
 void InitLcd()
 {
-  Lcd.begin(LcdH, LcdH);
+  Lcd.begin(LcdW, LcdH);
   Lcd.clear();
   Lcd.noCursor();
   Lcd.noBlink();
@@ -1561,6 +1572,35 @@ bool LcdCacheCreateCharCheckExistingGameObjsOrDefault(unsigned char x, unsigned 
   return existingSet == (RightDiraction | Left);
 }
 
+void LcdDrawUI()
+{
+  const char *enemiesStr = "Enemies: ";
+
+  String *enemiesCounterStr = new String(Enemies.Count());
+  char *enemiesStrTemp = StringConcatenate(enemiesStr, enemiesCounterStr->c_str());
+  int enemiesStrLen = GetStrLen(enemiesStrTemp);
+  if (LastEnemiesUiStringLen != enemiesStrLen)
+  {
+    Lcd.setCursor(0, 2);
+
+    for (int i = 0; i < LastEnemiesUiStringLen; ++i)
+      Lcd.write((byte)' ');
+
+    LastEnemiesUiStringLen = enemiesStrLen;
+    
+    Lcd.setCursor(0, 2);
+    Lcd.print(enemiesStrTemp);
+  }
+  else
+  {
+    Lcd.setCursor(GetStrLen(enemiesStr), 2);
+    Lcd.print(enemiesCounterStr->c_str());
+  }
+
+  delete enemiesCounterStr;
+  delete enemiesStrTemp;
+}
+
 void LcdDrawMap(unsigned char x, unsigned char y)
 {
   uint8_t lcdY = y % LcdRenderH;
@@ -1631,6 +1671,10 @@ void LcdDrawMap(unsigned char x, unsigned char y)
   Lcd.setCursor(lcdX * 2, otherLcdY);
   Lcd.write(lcd2RowIndexes[0]);
   Lcd.write(lcd2RowIndexes[1]);
+
+#if LcdH > 2
+  LcdDrawUI();
+#endif
 }
 
 char *LcdText = NULL;
@@ -1939,6 +1983,7 @@ void LcdTextPrintWorkerClbk(bool eventExec)
     Hero.X = 0;
     Hero.Y = 0;    
     HeroPosIsRightChar = false;
+    LastEnemiesUiStringLen = -1;
 
     ClearMap();
     ClearBomb();
@@ -1978,7 +2023,7 @@ void ArduinoOff()
 void setup() 
 {
   Serial.begin(9600);
-  randomSeed(analogRead(1));
+  randomSeed(analogRead(0));
   InitLcd();
   if (!InitAxis())
   {
