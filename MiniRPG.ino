@@ -1,4 +1,4 @@
-#define DEBUG_MOD false //set to true to duplicate the full status in the serial port
+#define DEBUG_MOD true //set to true to duplicate the full status in the serial port
 #define PRINT_LVL_TEXT true
 
 #define W 11
@@ -11,8 +11,9 @@
 #define AxisThreshold 30 // % 
 #define MinMaxAxisValues 14000 // max for GY-521 ~ 20000
 #define StartMinMaxAxisValues 10000
-#define StartLvl 5
-#define StartSpawnLvlEnemy 1
+#define StartLvl 1
+#define StartSpawnLvlEnemy 3
+#define StartBombCounter 3
 
 #define InputDelay 10
 #define HeroMoveDelay 300
@@ -25,6 +26,7 @@
 #define MinimumBombExplosionActionTime 4000
 
 #define LcdFogChar '#' //optionally 255 can be used
+#define BombItemChar '@'
 #define PortalLeftChars "({"
 #define PortalRightChars ")}"
 #define BombChars "@ "
@@ -516,8 +518,11 @@ AppState CurrentAppState = PrintInfo;
 unsigned int LvlCounter = StartLvl;
 ButtonValue Button = NoneButton;
 int LastEnemiesUiStringLen = -1;
+int LastBombCounterUiStringLen = -1;
 
 //--BOMB--
+byte BombCounter = StartBombCounter;
+Point *BombItem = NULL;
 Point *Bomb = NULL;
 bool BombIsRight = false;
 bool BombIsExplosion = false;
@@ -674,6 +679,12 @@ void DrawMap()
         }
       }
 
+      if (BombItem != NULL && BombItem->Y == y && BombItem->X == x)
+      {
+        Serial.print("@ ");
+        offset = "";
+      }
+
       Serial.print(offset);
 
       if (val & Right)
@@ -705,7 +716,15 @@ void DrawMap()
 void PrintHeroAndPortalCoord()
 {
   Serial.print("Hero "); Serial.print(Hero.X); Serial.print(":"); Serial.print(Hero.Y);
-  Serial.print("  Portal "); Serial.print(Portal.X); Serial.print(":"); Serial.println(Portal.Y);
+  Serial.print("  Portal "); Serial.print(Portal.X); Serial.print(":"); Serial.print(Portal.Y);
+  if (BombItem != NULL)
+  {
+    Serial.print("  Bomb Item "); Serial.print(BombItem->X); Serial.print(":"); Serial.println(BombItem->Y);
+  }
+  else
+  {
+    Serial.println();
+  }
 }
 
 bool CheckTopRoomAvailable(unsigned char x, unsigned char y)
@@ -806,7 +825,22 @@ void InitOtherPoint()
 { 
   Portal = GenerateRandomPoint();
 
+  Point bombItemPoint = GenerateRandomPoint();
+  BombItem = new Point();
+  BombItem->X = bombItemPoint.X;
+  BombItem->Y = bombItemPoint.Y;
+
   IninEnamies();
+}
+
+void ClearBombItem()
+{
+  if (BombItem != NULL)
+  {
+    Point *currentItemBomb = BombItem;
+    BombItem = NULL;
+    delete currentItemBomb;
+  } 
 }
 
 void ClearBomb()
@@ -818,7 +852,8 @@ void ClearBomb()
 
   Point *currentBomb = Bomb;
   Bomb = NULL;
-  delete currentBomb;
+  delete currentBomb;  
+
   Stack<Point> *currentExplosionPoints = ExplosionPoints;
   ExplosionPoints->Clear();
   ExplosionPoints = NULL;
@@ -1514,6 +1549,7 @@ Enemy* GetEnemyFromPoint(unsigned char x, unsigned char y)
 Diraction LcdCacheCreateCharCheckExistingGameObjs(unsigned char x, unsigned char y, byte lcdIndexes[], int leftIndex, int rightIndex)
 {
   byte bombChar = (byte)*BombAnimation.Current();
+  Enemy *enemy = NULL;
 
   if (x == Portal.X && y == Portal.Y)
   {
@@ -1543,17 +1579,17 @@ Diraction LcdCacheCreateCharCheckExistingGameObjs(unsigned char x, unsigned char
     lcdIndexes[leftIndex] = explosionChar;
     lcdIndexes[rightIndex] = explosionChar;
   }
-  else if (Enemies.Count() > 0)
+  else if (Enemies.Count() > 0 && (enemy = GetEnemyFromPoint(x, y)) != NULL)
   {
-    Enemy *enemy = GetEnemyFromPoint(x, y);
-
-    if (enemy == NULL)
-      return ZeroDiraction;
-
     byte enemyChar = (byte)*EnemyAnimations[enemy->AnimationContainerIndex].Current();
     lcdIndexes[enemy->PosIsRightChar ? rightIndex : leftIndex] = enemyChar;
 
     return enemy->PosIsRightChar ? RightDiraction : Left;
+  }
+  else if (BombItem != NULL && x == BombItem->X && y == BombItem->Y)
+  {
+    lcdIndexes[leftIndex] = BombItemChar;
+    return Left;
   }
   else
   {
@@ -1572,33 +1608,42 @@ bool LcdCacheCreateCharCheckExistingGameObjsOrDefault(unsigned char x, unsigned 
   return existingSet == (RightDiraction | Left);
 }
 
-void LcdDrawUI()
+int LcdDrawTextValueInfo(byte y, char *str, int value, int lastUiStringLen)
 {
-  const char *enemiesStr = "Enemies: ";
-
-  String *enemiesCounterStr = new String(Enemies.Count());
-  char *enemiesStrTemp = StringConcatenate(enemiesStr, enemiesCounterStr->c_str());
-  int enemiesStrLen = GetStrLen(enemiesStrTemp);
-  if (LastEnemiesUiStringLen != enemiesStrLen)
+  String *valueCounterStr = new String(value);
+  char *stringValueStrTemp = StringConcatenate(str, valueCounterStr->c_str());
+  int stringValueStrLen = GetStrLen(stringValueStrTemp);
+  if (lastUiStringLen != stringValueStrLen)
   {
-    Lcd.setCursor(0, 2);
+    Lcd.setCursor(0, y);
 
-    for (int i = 0; i < LastEnemiesUiStringLen; ++i)
+    for (int i = 0; i < lastUiStringLen; ++i)
       Lcd.write((byte)' ');
 
-    LastEnemiesUiStringLen = enemiesStrLen;
+    lastUiStringLen = stringValueStrLen;
     
-    Lcd.setCursor(0, 2);
-    Lcd.print(enemiesStrTemp);
+    Lcd.setCursor(0, y);
+    Lcd.print(stringValueStrTemp);
   }
   else
   {
-    Lcd.setCursor(GetStrLen(enemiesStr), 2);
-    Lcd.print(enemiesCounterStr->c_str());
+    Lcd.setCursor(GetStrLen(str), y);
+    Lcd.print(valueCounterStr->c_str());
   }
 
-  delete enemiesCounterStr;
-  delete enemiesStrTemp;
+  delete valueCounterStr;
+  delete stringValueStrTemp;
+
+  return lastUiStringLen;
+}
+
+void LcdDrawUI()
+{
+  const char *enemiesStr = "Enemies: ";
+  const char *bombsStr = "Bombs: ";
+
+  LastEnemiesUiStringLen = LcdDrawTextValueInfo(2, enemiesStr, Enemies.Count(), LastEnemiesUiStringLen);
+  LastBombCounterUiStringLen = LcdDrawTextValueInfo(3, bombsStr, BombCounter, LastBombCounterUiStringLen);  
 }
 
 void LcdDrawMap(unsigned char x, unsigned char y)
@@ -1823,6 +1868,12 @@ void HeroMoveWorkerClbk(bool eventExec)
     {
       InvokeGameRenderWorkerFlag = true;
 
+      if (BombItem != NULL && Hero.X == BombItem->X && Hero.Y == BombItem->Y && !HeroPosIsRightChar)
+      {
+        BombCounter++;
+        ClearBombItem();
+      }
+
       CheckHeroDie();
     }
   }
@@ -1924,8 +1975,9 @@ void GameLogicWorkerClbk(bool eventExec)
   HeroMoveWorker.Update();
   EnemyMoveWorker.Update();
 
-  if (Button == SelectButton && Bomb == NULL)
+  if (Button == SelectButton && Bomb == NULL && BombCounter > 0)
   {
+    BombCounter--;
     BombIsRight = !HeroPosIsRightChar;
     Bomb = new Point();
     Bomb->X = Hero.X;
@@ -1984,9 +2036,11 @@ void LcdTextPrintWorkerClbk(bool eventExec)
     Hero.Y = 0;    
     HeroPosIsRightChar = false;
     LastEnemiesUiStringLen = -1;
+    LastBombCounterUiStringLen = -1;
 
     ClearMap();
     ClearBomb();
+    ClearBombItem();
     GenerateMap();
     InitOtherPoint();
     GameRenderWorker.SetOnlyEventInvoked(false);
