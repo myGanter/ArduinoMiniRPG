@@ -1,4 +1,12 @@
-#define DEBUG_MOD true //set to true to duplicate the full status in the serial port
+#include "I2Cdev.h"
+#include "MPU6050.h"
+#include "Wire.h"
+#include <LiquidCrystal.h>
+#include <avr/interrupt.h>
+#include <avr/sleep.h>
+
+
+#define DEBUG_MOD false //set to true to duplicate the full status in the serial port
 #define PRINT_LVL_TEXT true
 
 #define W 11
@@ -54,13 +62,6 @@
 // ■■■    ■■■ 
 #define Enemy3Chars new char[2] { (char)239, (char)79 }
 
-#include "I2Cdev.h"
-#include "MPU6050.h"
-#include "Wire.h"
-#include <LiquidCrystal.h>
-#include <avr/interrupt.h>
-#include <avr/sleep.h>
-
 
 //-------------------- declare types
 enum Room : unsigned char
@@ -93,6 +94,20 @@ enum AppState : unsigned char
 {
   PrintInfo = 0,
   GameLoop = 1
+};
+
+struct Note
+{
+  int Value;
+  int Duration;
+};
+
+struct Sound
+{
+  Note *Notes;
+  int Length;
+  int CurrentPlayPos;
+  unsigned long LastExecTime;
 };
 
 struct Point
@@ -511,6 +526,7 @@ Room Map[H][W];
 Point Hero = { .X = 0, .Y = 0 };
 bool HeroPosIsRightChar = false;
 bool IsHeroDied = false;
+bool IsHeroLastSound1 = false;
 Stack<Enemy> Enemies = Stack<Enemy>();
 Point Portal = { .X = 0, .Y = 0 };
 Diraction LastAxisDiraction = ZeroDiraction;
@@ -532,6 +548,21 @@ Point ExplosionRight = { .X = 0, .Y = 0 };
 Point ExplosionLeft = { .X = 0, .Y = 0 };
 Point ExplosionBottom = { .X = 0, .Y = 0 };
 //-------------------- end global game vars
+
+
+//-------------------- global infrastructure vars
+bool InvokeHeroMoveWorkerFlag = false;
+bool InvokeGameRenderWorkerFlag = false;
+bool InvokeHeroBombWorkerFlag = false;
+bool BombExplosionWorkerFlag = false;
+bool GlobalSoundWorkerFlag = false;
+byte BombExplosionWorkerCounter = 0;
+
+char *LcdText = NULL;
+int TextIndex = 0;
+int TextOffSet = 0;
+Sound *SoundChannel = NULL;
+//-------------------- end global infrastructure vars
 
 
 //-------------------- map
@@ -1198,6 +1229,46 @@ void CheckHeroDie()
 //-------------------- end hero
 
 
+//-------------------- sound
+const Note WalkSound1[1] PROGMEM = { { .Value = 300, .Duration = 200 } };
+const Note WalkSound2[1] PROGMEM = { { .Value = 400, .Duration = 200 } };
+const Note TextSound[1] PROGMEM = { { .Value = 1000, .Duration = 70 } };
+const Note DieSound[31] PROGMEM = { { .Value = 466, .Duration = 1430 }, { .Value = 349, .Duration = 237 }, { .Value = 349, .Duration = 237 }, { .Value = 466, .Duration = 237 }, { .Value = 415, .Duration = 118 }, { .Value = 370, .Duration = 118 }, { .Value = 415, .Duration = 1430 }, { .Value = 466, .Duration = 1430 }, { .Value = 370, .Duration = 237 }, { .Value = 370, .Duration = 237 }, { .Value = 466, .Duration = 237 }, { .Value = 440, .Duration = 118 }, { .Value = 392, .Duration = 118 }, { .Value = 440, .Duration = 1430 }, { .Value = 466, .Duration = 476 }, { .Value = 349, .Duration = 714 }, { .Value = 466, .Duration = 237 }, { .Value = 466, .Duration = 118 }, { .Value = 523, .Duration = 118 }, { .Value = 587, .Duration = 118 }, { .Value = 622, .Duration = 118 }, { .Value = 698, .Duration = 954 }, { .Value = 698, .Duration = 237 }, { .Value = 698, .Duration = 237 }, { .Value = 698, .Duration = 237 }, { .Value = 740, .Duration = 118 }, { .Value = 831, .Duration = 118 }, { .Value = 932, .Duration = 1430 }, { .Value = 1109, .Duration = 476 }, { .Value = 1047, .Duration = 476 }, { .Value = 880, .Duration = 954 } };
+const Note BombTakeSound[4] PROGMEM = { { .Value = 1300, .Duration = 70 }, { .Value = 1000, .Duration = 70 }, { .Value = 1300, .Duration = 70 }, { .Value = 1000, .Duration = 250 } };
+const Note BombExplosionSound[16] PROGMEM = { { .Value = 400, .Duration = 70 }, { .Value = 370, .Duration = 70 }, { .Value = 430, .Duration = 70 }, { .Value = 400, .Duration = 70 }, { .Value = 370, .Duration = 70 }, { .Value = 430, .Duration = 70 }, { .Value = 400, .Duration = 70 }, { .Value = 370, .Duration = 70 }, { .Value = 430, .Duration = 70 }, { .Value = 400, .Duration = 70 }, { .Value = 370, .Duration = 70 }, { .Value = 430, .Duration = 70 }, { .Value = 400, .Duration = 70 }, { .Value = 370, .Duration = 70 }, { .Value = 430, .Duration = 70 }, { .Value = 433, .Duration = 120 } };
+
+
+void ClearSoundChannel()
+{
+  Sound *currentSound = SoundChannel;
+
+  noTone(13);
+
+  currentSound->Notes = NULL;
+  SoundChannel = NULL;
+   
+  delete currentSound; 
+}
+
+void PlaySound(Note *notes, int length, bool reWrite = true)
+{
+  if (SoundChannel != NULL)
+  {
+    if (reWrite)
+      ClearSoundChannel();
+    else
+      return;
+  }
+
+  SoundChannel = new Sound();
+  SoundChannel->Length = length;
+  SoundChannel->Notes = notes;
+
+  GlobalSoundWorkerFlag = true;
+}
+//-------------------- end sound
+
+
 //-------------------- lcd drawer
 const byte LeftWall[8] = 
 {
@@ -1722,10 +1793,6 @@ void LcdDrawMap(unsigned char x, unsigned char y)
 #endif
 }
 
-char *LcdText = NULL;
-int TextIndex = 0;
-int TextOffSet = 0;
-
 void InitLcdNextLvlText()
 {
   Lcd.clear();
@@ -1769,6 +1836,9 @@ bool DrawChar()
       Serial.print(LcdText[TextIndex]);
 #endif
 
+      if (LcdText[TextIndex] != ' ')
+        PlaySound(TextSound, sizeof(TextSound) / sizeof(Note), false);
+
       Lcd.setCursor(TextIndex - TextOffSet, TextOffSet == 0 ? 0 : 1);
       Lcd.print(LcdText[TextIndex++]);
     }    
@@ -1804,13 +1874,6 @@ void DrawGame()
 
 
 //-------------------- workers
-bool InvokeHeroMoveWorkerFlag = false;
-bool InvokeGameRenderWorkerFlag = false;
-bool InvokeHeroBombWorkerFlag = false;
-bool BombExplosionWorkerFlag = false;
-byte BombExplosionWorkerCounter = 0;
-
-
 void InputWorkerClbk(bool eventExec)
 {
   LastAxisDiraction = GetAxisDiraction();
@@ -1866,10 +1929,18 @@ void HeroMoveWorkerClbk(bool eventExec)
     }
     else
     {
+      if (IsHeroLastSound1)
+        PlaySound(WalkSound2, sizeof(WalkSound2) / sizeof(Note), false);
+      else
+        PlaySound(WalkSound1, sizeof(WalkSound1) / sizeof(Note), false);
+
+      IsHeroLastSound1 = !IsHeroLastSound1;
+
       InvokeGameRenderWorkerFlag = true;
 
       if (BombItem != NULL && Hero.X == BombItem->X && Hero.Y == BombItem->Y && !HeroPosIsRightChar)
       {
+        PlaySound(BombTakeSound, sizeof(BombTakeSound) / sizeof(Note));
         BombCounter++;
         ClearBombItem();
       }
@@ -1933,6 +2004,8 @@ void HeroBombWorkerClbk(bool eventExec)
 
   if (!BombIsExplosion)
   {
+    PlaySound(BombExplosionSound, sizeof(BombExplosionSound) / sizeof(Note));
+
     BombIsExplosion = true;
     BombExplosionWorkerFlag = true;
     ExplosionPoints = new Stack<Point>();
@@ -1998,9 +2071,14 @@ TimeWorker GameLogicWorker = TimeWorker(InputDelay, GameLogicWorkerClbk);
 void SwichModeToPrintLcdText()
 {
   if (IsHeroDied)
+  {
+    PlaySound(DieSound, sizeof(DieSound) / sizeof(Note));
     InitLcdGameOverText();
+  }
   else
+  {
     InitLcdNextLvlText();
+  }
 
   GameRenderWorker.SetOnlyEventInvoked(true);
 
@@ -2028,6 +2106,7 @@ void LcdTextPrintWorkerClbk(bool eventExec)
     {
       IsHeroDied = false;
       LvlCounter = 1;
+      BombCounter = StartBombCounter;
       SwichModeToPrintLcdText();
       return;
     }
@@ -2063,6 +2142,39 @@ void GlobalAnimationWorkerClbk(bool eventExec)
     EnemyAnimations[i].IncrementIndex();
 }
 TimeWorker GlobalAnimationWorker = TimeWorker(GameRenderDelay, GlobalAnimationWorkerClbk);
+
+
+void GlobalSoundWorkerClbk(bool eventExec)
+{
+  if (SoundChannel == NULL)
+    return;
+
+  Sound *currentSound = SoundChannel;
+  Note *notes = currentSound->Notes;
+  Note currentNote;
+  Note prevNote;
+
+  memcpy_P(&currentNote, &notes[currentSound->CurrentPlayPos >= currentSound->Length ? currentSound->CurrentPlayPos - 1 : currentSound->CurrentPlayPos], sizeof(Note));
+  memcpy_P(&prevNote, &notes[currentSound->CurrentPlayPos > 0 ? currentSound->CurrentPlayPos - 1 : 0], sizeof(Note));
+  unsigned long curTime = millis();
+
+  if (currentSound->CurrentPlayPos >= currentSound->Length && (curTime - currentSound->LastExecTime) >= currentNote.Duration)
+  {
+    ClearSoundChannel();
+    return;
+  }
+  else if ((curTime - currentSound->LastExecTime) >= prevNote.Duration)
+  {
+    if (currentNote.Value == 0)
+      noTone(13);
+    else
+      tone(13, currentNote.Value, currentNote.Duration);
+
+    currentSound->CurrentPlayPos++;
+    currentSound->LastExecTime = curTime;
+  }  
+}
+TimeWorker GlobalSoundWorker = TimeWorker(InputDelay, GlobalSoundWorkerClbk, &GlobalSoundWorkerFlag, false);
 //-------------------- end workers
 
 
@@ -2077,8 +2189,13 @@ void ArduinoOff()
 void setup() 
 {
   Serial.begin(9600);
+
   randomSeed(analogRead(0));
+
   InitLcd();
+
+  pinMode(13, OUTPUT);
+
   if (!InitAxis())
   {
     ArduinoOff(); 
@@ -2091,6 +2208,7 @@ void setup()
 void loop() 
 {
   InputWorker.Update();
+  GlobalSoundWorker.Update();
 
   switch (CurrentAppState)
   {
