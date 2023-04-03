@@ -12,7 +12,7 @@
 #define W 10
 #define H 10
 #define LcdW 20
-#define LcdH 4 // if > 2 then refactor LcdDrawMap func
+#define LcdH 4
 #define LcdRenderW 10 // LcdW / 2
 #define LcdRenderH 2
 #define ActivateRoomValue 1
