@@ -7,6 +7,8 @@ Gameplay: you play as a hero whose goal is to go down into the dungeon as deep a
 The hero is controlled using a gyroscope, setting a bomb, using a button.
 
 ![GAME](https://github.com/myGanter/ArduinoMiniRPG/blob/master/images/Wokwi1.PNG)
+![REALGAME](https://github.com/myGanter/ArduinoMiniRPG/blob/master/images/Real1.jpg)
+![REALGAME](https://github.com/myGanter/ArduinoMiniRPG/blob/master/images/Real2.jpg)
 
 ### Components and modules
 - arduino-nano
