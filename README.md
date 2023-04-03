@@ -7,3 +7,17 @@ Gameplay: you play as a hero whose goal is to go down into the dungeon as deep a
 The hero is controlled using a gyroscope, setting a bomb, using a button.
 
 ![GAME](https://github.com/myGanter/ArduinoMiniRPG/blob/master/images/Wokwi1.PNG)
+
+### Components and modules
+- arduino-nano
+- lcd2004 or lcd1602
+- resistors
+- buzzer
+- button
+- mpu6050
+
+### The connection diagram is available on the Wokwi page
+- with lcd2004 module
+    - https://wokwi.com/projects/350656075353031252
+- with lcd1602 module
+    - https://wokwi.com/projects/360981847741806593
