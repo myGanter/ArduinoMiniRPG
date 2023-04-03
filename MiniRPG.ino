@@ -9,16 +9,17 @@
 #define DEBUG_MOD false //set to true to duplicate the full status in the serial port
 #define PRINT_LVL_TEXT true
 
-#define W 11
+#define W 10
 #define H 10
 #define LcdW 20
 #define LcdH 4 // if > 2 then refactor LcdDrawMap func
 #define LcdRenderW 10 // LcdW / 2
 #define LcdRenderH 2
 #define ActivateRoomValue 1
-#define AxisThreshold 30 // % 
+#define AxisThreshold 25 // % 
 #define MinMaxAxisValues 14000 // max for GY-521 ~ 20000
 #define StartMinMaxAxisValues 10000
+
 #define StartLvl 1
 #define StartSpawnLvlEnemy 3
 #define StartBombCounter 3
@@ -451,6 +452,7 @@ bool InitAxis()
   MinAxisY = -StartMinMaxAxisValues;
   MaxAxisX = StartMinMaxAxisValues;
   MinAxisX = -StartMinMaxAxisValues;
+
   Wire.begin();
   CY531.initialize();
   delay(100);
@@ -495,13 +497,13 @@ Diraction GetAxisDiraction()
   //Serial.print(",y:"); Serial.println(-ay);
 
   if (ax > MaxAxisX) MaxAxisX = ax;
-  if (abs(MaxAxisX) > MinMaxAxisValues) MaxAxisX = MinMaxAxisValues;
+  if (MaxAxisX > MinMaxAxisValues) MaxAxisX = MinMaxAxisValues;
   if (ax < MinAxisX) MinAxisX = ax;
-  if (abs(MinAxisX) > MinMaxAxisValues) MinAxisX = MinMaxAxisValues;
+  if (MinAxisX < -MinMaxAxisValues) MinAxisX = -MinMaxAxisValues;
   if (ay > MaxAxisY) MaxAxisY = ay;
-  if (abs(MaxAxisY) > MinMaxAxisValues) MaxAxisY = MinMaxAxisValues;
+  if (MaxAxisY > MinMaxAxisValues) MaxAxisY = MinMaxAxisValues;
   if (ay < MinAxisY) MinAxisY = ay;
-  if (abs(MinAxisY) > MinMaxAxisValues) MinAxisY = MinMaxAxisValues;
+  if (MinAxisY < -MinMaxAxisValues) MinAxisY = -MinMaxAxisValues;
   
   int16_t diffX = GetAxisDiff(MaxAxisX, MinAxisX, ax);
   int16_t diffY = GetAxisDiff(MaxAxisY, MinAxisY, ay);
@@ -567,6 +569,74 @@ Sound *SoundChannel = NULL;
 
 //-------------------- map
 void GenerateMap()
+{
+#if W > 11 || H > 10
+  GenerateMapStupidAlg();
+#else
+  GenerateMapWormAlg();
+#endif
+}
+
+void GenerateMapStupidAlg()
+{
+  for (int x = 0; x < W - 1; ++x)
+  {
+    RoomAddValue({ .X = x, .Y = 0 }, Right);        
+  }
+
+  for (int y = 0; y < H; ++y)
+  {
+    int bucketCounter = random(W / 3) + 2;
+    int bucketLen = W / bucketCounter;
+    int mod = (int)ceil((float)bucketCounter / (W % bucketCounter));
+    int modLen = W % bucketCounter != 0 ? (W - bucketCounter * bucketLen) / (bucketCounter / mod) : 0;
+
+    int fixer = 0;
+
+    for (int i = 0; i < bucketCounter; ++i)
+    {
+      if (W % bucketCounter != 0 && (i + 1) % mod == 0)
+      {
+        int max = i * bucketLen + fixer + modLen;
+
+        for (int modx = i * bucketLen + fixer; modx < max; ++modx)
+        {
+          if (y - 1 > -1)
+            RoomAddValue({ .X = modx, .Y = y - 1 }, Down);
+
+          fixer++;
+        }
+      }
+
+      int curx = i * bucketLen + fixer;
+
+      for (int bucketx = curx; bucketx < curx + bucketLen - 1; ++bucketx)
+      {
+        RoomAddValue({ .X = bucketx, .Y = y }, Right);
+      }
+
+      if (y - 1 > -1)
+        RoomAddValue({ .X = random(bucketLen) + curx, .Y = y - 1 }, Down);        
+    }
+
+    for (int x = bucketCounter / mod * modLen + bucketLen * bucketCounter; x < W; ++x)
+    {
+      if (y - 1 > -1)
+        RoomAddValue({ .X = x, .Y = y - 1 }, Down);
+    }
+
+    for (int x = 0; x < W; ++x)
+    {
+      if (y < H - 1 && random(100) < 5)
+        RoomAddValue({ .X = x, .Y = y }, Down);
+      
+      if (x < W - 1 && random(100) < 5)
+        RoomAddValue({ .X = x, .Y = y }, Right);
+    }
+  }
+}
+
+void GenerateMapWormAlg()
 {
   Stack<PointDiraction>* stack = new Stack<PointDiraction>();
   PointDiraction empty { .P = { .X = 0, .Y = 0 }, .Diraction = ZeroDiraction };
@@ -697,6 +767,11 @@ void DrawMap()
         Serial.print("()");
         offset = "";
       }
+      else if (BombItem != NULL && BombItem->Y == y && BombItem->X == x)
+      {
+        Serial.print("@ ");
+        offset = "";
+      }
       else if (Enemies.Count() > 0)
       {
         Enemy *enemy = GetEnemyFromPoint(x, y);
@@ -708,12 +783,6 @@ void DrawMap()
             Serial.print("? ");
           offset = "";
         }
-      }
-
-      if (BombItem != NULL && BombItem->Y == y && BombItem->X == x)
-      {
-        Serial.print("@ ");
-        offset = "";
       }
 
       Serial.print(offset);
@@ -1234,6 +1303,7 @@ const Note WalkSound1[1] PROGMEM = { { .Value = 300, .Duration = 200 } };
 const Note WalkSound2[1] PROGMEM = { { .Value = 400, .Duration = 200 } };
 const Note TextSound[1] PROGMEM = { { .Value = 1000, .Duration = 70 } };
 const Note DieSound[31] PROGMEM = { { .Value = 466, .Duration = 1430 }, { .Value = 349, .Duration = 237 }, { .Value = 349, .Duration = 237 }, { .Value = 466, .Duration = 237 }, { .Value = 415, .Duration = 118 }, { .Value = 370, .Duration = 118 }, { .Value = 415, .Duration = 1430 }, { .Value = 466, .Duration = 1430 }, { .Value = 370, .Duration = 237 }, { .Value = 370, .Duration = 237 }, { .Value = 466, .Duration = 237 }, { .Value = 440, .Duration = 118 }, { .Value = 392, .Duration = 118 }, { .Value = 440, .Duration = 1430 }, { .Value = 466, .Duration = 476 }, { .Value = 349, .Duration = 714 }, { .Value = 466, .Duration = 237 }, { .Value = 466, .Duration = 118 }, { .Value = 523, .Duration = 118 }, { .Value = 587, .Duration = 118 }, { .Value = 622, .Duration = 118 }, { .Value = 698, .Duration = 954 }, { .Value = 698, .Duration = 237 }, { .Value = 698, .Duration = 237 }, { .Value = 698, .Duration = 237 }, { .Value = 740, .Duration = 118 }, { .Value = 831, .Duration = 118 }, { .Value = 932, .Duration = 1430 }, { .Value = 1109, .Duration = 476 }, { .Value = 1047, .Duration = 476 }, { .Value = 880, .Duration = 954 } };
+const Note WinSound[128] PROGMEM = { { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 165, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 147, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 131, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 117, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 123, .Duration = 133 }, { .Value = 131, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 165, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 147, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 131, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 117, .Duration = 799 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 165, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 147, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 131, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 117, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 123, .Duration = 133 }, { .Value = 131, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 165, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 147, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 185, .Duration = 99 }, { .Value = 147, .Duration = 99 }, { .Value = 123, .Duration = 99 }, { .Value = 220, .Duration = 99 }, { .Value = 185, .Duration = 99 }, { .Value = 123, .Duration = 99 }, { .Value = 147, .Duration = 99 }, { .Value = 185, .Duration = 99 }, { .Value = 220, .Duration = 99 }, { .Value = 185, .Duration = 99 }, { .Value = 147, .Duration = 99 }, { .Value = 123, .Duration = 99 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 165, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 147, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 131, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 117, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 123, .Duration = 133 }, { .Value = 131, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 165, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 147, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 131, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 117, .Duration = 799 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 165, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 147, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 131, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 117, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 123, .Duration = 133 }, { .Value = 131, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 165, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 147, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 247, .Duration = 99 }, { .Value = 196, .Duration = 99 }, { .Value = 165, .Duration = 99 }, { .Value = 196, .Duration = 99 }, { .Value = 247, .Duration = 99 }, { .Value = 330, .Duration = 99 }, { .Value = 196, .Duration = 99 }, { .Value = 247, .Duration = 99 }, { .Value = 330, .Duration = 99 }, { .Value = 247, .Duration = 99 }, { .Value = 392, .Duration = 99 }, { .Value = 494, .Duration = 99 } };
 const Note BombTakeSound[4] PROGMEM = { { .Value = 1300, .Duration = 70 }, { .Value = 1000, .Duration = 70 }, { .Value = 1300, .Duration = 70 }, { .Value = 1000, .Duration = 250 } };
 const Note BombExplosionSound[16] PROGMEM = { { .Value = 400, .Duration = 70 }, { .Value = 370, .Duration = 70 }, { .Value = 430, .Duration = 70 }, { .Value = 400, .Duration = 70 }, { .Value = 370, .Duration = 70 }, { .Value = 430, .Duration = 70 }, { .Value = 400, .Duration = 70 }, { .Value = 370, .Duration = 70 }, { .Value = 430, .Duration = 70 }, { .Value = 400, .Duration = 70 }, { .Value = 370, .Duration = 70 }, { .Value = 430, .Duration = 70 }, { .Value = 400, .Duration = 70 }, { .Value = 370, .Duration = 70 }, { .Value = 430, .Duration = 70 }, { .Value = 433, .Duration = 120 } };
 
@@ -1914,6 +1984,7 @@ void HeroMoveWorkerClbk(bool eventExec)
 
   if (Hero.X == Portal.X && Hero.Y == Portal.Y)
   {
+    PlaySound(WinSound, sizeof(WinSound) / sizeof(Note));
     SwichModeToPrintLcdText();
   }
   else if (IsHeroDied)
