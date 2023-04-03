@@ -21,3 +21,12 @@ The hero is controlled using a gyroscope, setting a bomb, using a button.
     - https://wokwi.com/projects/350656075353031252
 - with lcd1602 module
     - https://wokwi.com/projects/360981847741806593
+
+In the Wokwi environment, there is an unpleasant bug with redrawing graphics, in real life I do not observe this problem.
+
+## Settings in the code
+    #define W 10    // Width of the generated maze
+    #define H 10    // The height of the generated maze
+    #define LcdW 20 // Horizontal matrix size (for lcd1602 set 16)
+    #define LcdH 4  // Vertical matrix size (for lcd1602 set 2)
+    // you probably won't need the rest of the settings :3
