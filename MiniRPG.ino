@@ -23,6 +23,7 @@
 #define StartLvl 1
 #define StartSpawnLvlEnemy 3
 #define StartBombCounter 3
+#define DetectEnemyDistance 2
 
 #define InputDelay 10
 #define HeroMoveDelay 300
@@ -162,6 +163,16 @@ int GetStrLen(const char *str)
 {
   int res = 0;
   const char *f = str;
+
+  while (*f++) ++res;
+
+  return res;
+}
+
+int GetStrLen(const byte *str)
+{
+  int res = 0;
+  const byte *f = str;
 
   while (*f++) ++res;
 
@@ -536,6 +547,7 @@ AppState CurrentAppState = PrintInfo;
 unsigned int LvlCounter = StartLvl;
 ButtonValue Button = NoneButton;
 int LastEnemiesUiStringLen = -1;
+int LastEnemiesDetectedUiStringLen = -1;
 int LastBombCounterUiStringLen = -1;
 
 //--BOMB--
@@ -1749,26 +1761,44 @@ bool LcdCacheCreateCharCheckExistingGameObjsOrDefault(unsigned char x, unsigned 
   return existingSet == (RightDiraction | Left);
 }
 
-int LcdDrawTextValueInfo(byte y, char *str, int value, int lastUiStringLen)
+int LcdDrawTextInfo(byte x, byte y, byte *str, int lastUiStringLen)
+{
+  int strLen = GetStrLen(str);
+  if (strLen != lastUiStringLen)
+  {
+    Lcd.setCursor(x, y);
+
+    for (int i = 0; i < lastUiStringLen; ++i)
+      Lcd.write((byte)' ');
+  }
+
+  Lcd.setCursor(x, y);
+  for (int i = 0; i < strLen; ++i)
+    Lcd.write(str[i]);
+
+  return strLen;
+}
+
+int LcdDrawTextValueInfo(byte x, byte y, char *str, int value, int lastUiStringLen)
 {
   String *valueCounterStr = new String(value);
   char *stringValueStrTemp = StringConcatenate(str, valueCounterStr->c_str());
   int stringValueStrLen = GetStrLen(stringValueStrTemp);
   if (lastUiStringLen != stringValueStrLen)
   {
-    Lcd.setCursor(0, y);
+    Lcd.setCursor(x, y);
 
     for (int i = 0; i < lastUiStringLen; ++i)
       Lcd.write((byte)' ');
 
     lastUiStringLen = stringValueStrLen;
     
-    Lcd.setCursor(0, y);
+    Lcd.setCursor(x, y);
     Lcd.print(stringValueStrTemp);
   }
   else
   {
-    Lcd.setCursor(GetStrLen(str), y);
+    Lcd.setCursor(x + GetStrLen(str), y);
     Lcd.print(valueCounterStr->c_str());
   }
 
@@ -1782,9 +1812,48 @@ void LcdDrawUI()
 {
   const char *enemiesStr = "Enemies: ";
   const char *bombsStr = "Bombs: ";
+  byte *detectEnemyStr = NULL;
+  byte emptyChar[2] { (byte)' ', (byte)'\0' };
 
-  LastEnemiesUiStringLen = LcdDrawTextValueInfo(2, enemiesStr, Enemies.Count(), LastEnemiesUiStringLen);
-  LastBombCounterUiStringLen = LcdDrawTextValueInfo(3, bombsStr, BombCounter, LastBombCounterUiStringLen);  
+  if (Enemies.Count() > 0)
+  {
+    Stack<byte> enemyAnimationIndexes = Stack<byte>();
+    NodeIterator<Enemy> *enemiesIterator = Enemies.CreateIterator();
+
+    do
+    {
+      Enemy *enemy = enemiesIterator->GetReferenceValue();
+
+      if (sqrt(pow(Hero.X - enemy->Position.X, 2) + pow(Hero.Y - enemy->Position.Y, 2)) <= DetectEnemyDistance)
+      {
+        enemyAnimationIndexes.Push(enemy->AnimationContainerIndex);
+      }
+    } 
+    while (enemiesIterator->MoveNext());
+    delete enemiesIterator;
+
+    if (enemyAnimationIndexes.Count() > 0)
+    {
+      detectEnemyStr = new byte[enemyAnimationIndexes.Count() + 1];
+
+      int i = 0;
+      while (enemyAnimationIndexes.Count() > 0)
+      {
+        detectEnemyStr[i++] = (byte)*EnemyAnimations[enemyAnimationIndexes.Pop()].Current();
+      }
+
+      detectEnemyStr[i] = (byte)'\0';
+    }
+
+    enemyAnimationIndexes.Clear();
+  }
+
+  LastEnemiesUiStringLen = LcdDrawTextValueInfo(0, 2, enemiesStr, Enemies.Count(), LastEnemiesUiStringLen);
+  LastBombCounterUiStringLen = LcdDrawTextValueInfo(0, 3, bombsStr, BombCounter, LastBombCounterUiStringLen);  
+  LastEnemiesDetectedUiStringLen = LcdDrawTextInfo(LastBombCounterUiStringLen + 1, 3, detectEnemyStr == NULL ? emptyChar : detectEnemyStr, LastEnemiesDetectedUiStringLen);
+
+  if (detectEnemyStr != NULL)
+    delete detectEnemyStr;
 }
 
 void LcdDrawMap(unsigned char x, unsigned char y)
@@ -2186,6 +2255,7 @@ void LcdTextPrintWorkerClbk(bool eventExec)
     Hero.Y = 0;    
     HeroPosIsRightChar = false;
     LastEnemiesUiStringLen = -1;
+    LastEnemiesDetectedUiStringLen = -1;
     LastBombCounterUiStringLen = -1;
 
     ClearMap();
