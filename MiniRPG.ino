@@ -28,7 +28,8 @@
 #define InputDelay 10
 #define HeroMoveDelay 300
 #define EnemyMoveDelay 3000
-#define LcdTextPrintDelay 300
+#define LcdTextPrintDelay 130
+#define LcdTextFinalDelay 1200
 #define GameRenderDelay 200 //5 fps
 #define GlobalAnimationDelay 500
 #define BombExplosionDelay 3000
@@ -570,7 +571,10 @@ bool InvokeGameRenderWorkerFlag = false;
 bool InvokeHeroBombWorkerFlag = false;
 bool BombExplosionWorkerFlag = false;
 bool GlobalSoundWorkerFlag = false;
+bool LcdTextPrintContinueWorkerFlag = false;
+
 byte BombExplosionWorkerCounter = 0;
+bool IsInvokedLcdTextPrintContinueWorker = false;
 
 char *LcdText = NULL;
 int TextIndex = 0;
@@ -1313,7 +1317,7 @@ void CheckHeroDie()
 //-------------------- sound
 const Note WalkSound1[1] PROGMEM = { { .Value = 300, .Duration = 200 } };
 const Note WalkSound2[1] PROGMEM = { { .Value = 400, .Duration = 200 } };
-const Note TextSound[1] PROGMEM = { { .Value = 1000, .Duration = 70 } };
+const Note TextSound[1] PROGMEM = { { .Value = 600, .Duration = 70 } };
 const Note DieSound[31] PROGMEM = { { .Value = 466, .Duration = 1430 }, { .Value = 349, .Duration = 237 }, { .Value = 349, .Duration = 237 }, { .Value = 466, .Duration = 237 }, { .Value = 415, .Duration = 118 }, { .Value = 370, .Duration = 118 }, { .Value = 415, .Duration = 1430 }, { .Value = 466, .Duration = 1430 }, { .Value = 370, .Duration = 237 }, { .Value = 370, .Duration = 237 }, { .Value = 466, .Duration = 237 }, { .Value = 440, .Duration = 118 }, { .Value = 392, .Duration = 118 }, { .Value = 440, .Duration = 1430 }, { .Value = 466, .Duration = 476 }, { .Value = 349, .Duration = 714 }, { .Value = 466, .Duration = 237 }, { .Value = 466, .Duration = 118 }, { .Value = 523, .Duration = 118 }, { .Value = 587, .Duration = 118 }, { .Value = 622, .Duration = 118 }, { .Value = 698, .Duration = 954 }, { .Value = 698, .Duration = 237 }, { .Value = 698, .Duration = 237 }, { .Value = 698, .Duration = 237 }, { .Value = 740, .Duration = 118 }, { .Value = 831, .Duration = 118 }, { .Value = 932, .Duration = 1430 }, { .Value = 1109, .Duration = 476 }, { .Value = 1047, .Duration = 476 }, { .Value = 880, .Duration = 954 } };
 const Note WinSound[128] PROGMEM = { { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 165, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 147, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 131, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 117, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 123, .Duration = 133 }, { .Value = 131, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 165, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 147, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 131, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 117, .Duration = 799 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 165, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 147, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 131, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 117, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 123, .Duration = 133 }, { .Value = 131, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 165, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 147, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 185, .Duration = 99 }, { .Value = 147, .Duration = 99 }, { .Value = 123, .Duration = 99 }, { .Value = 220, .Duration = 99 }, { .Value = 185, .Duration = 99 }, { .Value = 123, .Duration = 99 }, { .Value = 147, .Duration = 99 }, { .Value = 185, .Duration = 99 }, { .Value = 220, .Duration = 99 }, { .Value = 185, .Duration = 99 }, { .Value = 147, .Duration = 99 }, { .Value = 123, .Duration = 99 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 165, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 147, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 131, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 117, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 123, .Duration = 133 }, { .Value = 131, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 165, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 147, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 131, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 117, .Duration = 799 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 165, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 147, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 131, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 117, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 123, .Duration = 133 }, { .Value = 131, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 165, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 147, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 82, .Duration = 133 }, { .Value = 247, .Duration = 99 }, { .Value = 196, .Duration = 99 }, { .Value = 165, .Duration = 99 }, { .Value = 196, .Duration = 99 }, { .Value = 247, .Duration = 99 }, { .Value = 330, .Duration = 99 }, { .Value = 196, .Duration = 99 }, { .Value = 247, .Duration = 99 }, { .Value = 330, .Duration = 99 }, { .Value = 247, .Duration = 99 }, { .Value = 392, .Duration = 99 }, { .Value = 494, .Duration = 99 } };
 const Note BombTakeSound[4] PROGMEM = { { .Value = 1300, .Duration = 70 }, { .Value = 1000, .Duration = 70 }, { .Value = 1300, .Duration = 70 }, { .Value = 1000, .Duration = 250 } };
@@ -2220,10 +2224,56 @@ void SwichModeToPrintLcdText()
     InitLcdNextLvlText();
   }
 
+  IsInvokedLcdTextPrintContinueWorker = false;
   GameRenderWorker.SetOnlyEventInvoked(true);
 
   CurrentAppState = PrintInfo;
 }
+void LcdTextPrintContinueWorkerClbk(bool eventExec)
+{
+#if PRINT_LVL_TEXT
+  if (eventExec)
+    return;
+#endif  
+
+  char *ptr = LcdText;
+  LcdText = NULL;
+  delete ptr;
+  TextIndex = 0;
+  TextOffSet = 0;
+
+  if (!IsHeroDied)
+  {
+    LvlCounter++;
+  }
+  else
+  {
+    IsHeroDied = false;
+    LvlCounter = 1;
+    BombCounter = StartBombCounter;
+    SwichModeToPrintLcdText();
+    return;
+  }
+
+  Hero.X = 0;
+  Hero.Y = 0;    
+  HeroPosIsRightChar = false;
+  LastEnemiesUiStringLen = -1;
+  LastEnemiesDetectedUiStringLen = -1;
+  LastBombCounterUiStringLen = -1;
+
+  ClearMap();
+  ClearBomb();
+  ClearBombItem();
+  GenerateMap();
+  InitOtherPoint();
+  GameRenderWorker.SetOnlyEventInvoked(false);
+
+  CurrentAppState = GameLoop;
+}
+TimeWorker LcdTextPrintContinueWorker = TimeWorker(LcdTextFinalDelay, LcdTextPrintContinueWorkerClbk, &LcdTextPrintContinueWorkerFlag, false);
+
+
 void LcdTextPrintWorkerClbk(bool eventExec)
 {
 #if PRINT_LVL_TEXT
@@ -2232,40 +2282,13 @@ void LcdTextPrintWorkerClbk(bool eventExec)
   if (true)
 #endif
   {
-    char *ptr = LcdText;
-    LcdText = NULL;
-    delete ptr;
-    TextIndex = 0;
-    TextOffSet = 0;
-
-    if (!IsHeroDied)
+    if (!IsInvokedLcdTextPrintContinueWorker)
     {
-      LvlCounter++;
-    }
-    else
-    {
-      IsHeroDied = false;
-      LvlCounter = 1;
-      BombCounter = StartBombCounter;
-      SwichModeToPrintLcdText();
-      return;
+      IsInvokedLcdTextPrintContinueWorker = true;
+      LcdTextPrintContinueWorkerFlag = true;
     }
 
-    Hero.X = 0;
-    Hero.Y = 0;    
-    HeroPosIsRightChar = false;
-    LastEnemiesUiStringLen = -1;
-    LastEnemiesDetectedUiStringLen = -1;
-    LastBombCounterUiStringLen = -1;
-
-    ClearMap();
-    ClearBomb();
-    ClearBombItem();
-    GenerateMap();
-    InitOtherPoint();
-    GameRenderWorker.SetOnlyEventInvoked(false);
-
-    CurrentAppState = GameLoop;
+    LcdTextPrintContinueWorker.Update();  
   }
 }
 TimeWorker LcdTextPrintWorker = TimeWorker(LcdTextPrintDelay, LcdTextPrintWorkerClbk);
